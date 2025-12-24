@@ -14,7 +14,7 @@ app.use(express.urlencoded({ extended: true }));
 
 
 app.post("/register", registerUser);
-app.get("/login", loginUser);
+app.post("/login", loginUser);
 
 
 
