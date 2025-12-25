@@ -10,7 +10,8 @@ import { useAuth } from '@/context/AuthContext';
 
 export default function HomeScreen() {
   const { user } = useAuth();
-  const categories = ['Wood Carving', 'Pottery', 'Heritage', 'Cultural'];
+  const categories = ['All', 'Wood Carving', 'Pottery', 'Heritage', 'Cultural'];
+  const [selectedCategory, setSelectedCategory] = useState('All');
   
   const [suggestedRoutes, setSuggestedRoutes] = useState<SuggestedRoute[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -78,8 +79,12 @@ export default function HomeScreen() {
     setShowDetailModal(true);
   };
 
-  // Filter only roadmaps
-  const roadmapRoutes = suggestedRoutes.filter(route => route.type === 'roadmap');
+  // Filter only roadmaps and by selected category
+  const roadmapRoutes = suggestedRoutes.filter(route => {
+    if (route.type !== 'roadmap') return false;
+    if (selectedCategory === 'All') return true;
+    return route.category?.toLowerCase() === selectedCategory.toLowerCase();
+  });
 
   // Close the detail modal
   const handleCloseModal = () => {
@@ -247,8 +252,12 @@ export default function HomeScreen() {
             <Text style={styles.sectionTitle}>Select your next experience</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoriesScroll}>
               {categories.map((category, index) => (
-                <TouchableOpacity key={index} style={styles.categoryPill}>
-                  <Text style={styles.categoryText}>{category}</Text>
+                <TouchableOpacity
+                  key={index}
+                  style={[styles.categoryPill, selectedCategory === category && { backgroundColor: '#E45C12' }]}
+                  onPress={() => setSelectedCategory(category)}
+                >
+                  <Text style={[styles.categoryText, selectedCategory === category && { color: '#fff' }]}>{category}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -257,7 +266,27 @@ export default function HomeScreen() {
           {/* Featured Event */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Featured Event:</Text>
-            <View style={styles.featuredCard}>
+            <TouchableOpacity
+              style={styles.featuredCard}
+              activeOpacity={0.9}
+              disabled={eventLoading || !featuredEvent}
+              onPress={() => {
+                if (featuredEvent && featuredEvent.locations && featuredEvent.locations.length > 0) {
+                  const loc = featuredEvent.locations[0];
+                  router.push({
+                    pathname: '/(tabs)/explore',
+                    params: {
+                      eventId: featuredEvent._id,
+                      eventName: featuredEvent.name,
+                      eventLat: loc.coordinates?.lat,
+                      eventLng: loc.coordinates?.lng,
+                      eventDesc: featuredEvent.description || '',
+                      eventCategory: featuredEvent.category || '',
+                    },
+                  });
+                }
+              }}
+            >
               {eventLoading ? (
                 <View style={styles.featuredLoading}>
                   <ActivityIndicator size="small" color="#E45C12" />
@@ -298,7 +327,7 @@ export default function HomeScreen() {
                   <Text style={styles.noEventText}>No featured event</Text>
                 </View>
               )}
-            </View>
+            </TouchableOpacity>
           </View>
 
           {/* Suggested Roadmaps */}
@@ -809,15 +838,3 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
 });
-
-/* Rectangle */
-
-// position: absolute;
-// width: 184px;
-// height: 256px;
-// left: 0px;
-// top: 0px;
-
-// background: url(image.png);
-// box-shadow: inset 0px -80px 10px rgba(0, 0, 0, 0.25);
-// border-radius: 16px 16px 16px 88px;

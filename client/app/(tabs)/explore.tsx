@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   Dimensions,
@@ -11,14 +10,21 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
+  ViewStyle,
+  Modal,
+  TextInput,
+  Image,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Location from 'expo-location';
+import * as SecureStore from 'expo-secure-store';
+import ViewShot, { captureRef } from "react-native-view-shot";
 import { api, Place, Trail } from '@/services/api';
+import { useAuth } from '../../context/AuthContext';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -85,39 +91,83 @@ const getMapHTML = (markers: MapMarker[], showRouteLine: boolean = true, routeCo
       box-shadow: 0 2px 6px rgba(0,0,0,0.3);
     }
     .user-marker {
-      background: #4285F4;
+      background: #800080;
       border-radius: 50%;
       border: 3px solid white;
-      box-shadow: 0 0 0 8px rgba(66, 133, 244, 0.3), 0 2px 6px rgba(0,0,0,0.3);
+      box-shadow: 0 0 0 8px rgba(128, 0, 128, 0.3), 0 2px 6px rgba(0,0,0,0.3);
     }
     .user-pulse {
       position: absolute;
       width: 40px;
       height: 40px;
       border-radius: 50%;
-      background: rgba(66, 133, 244, 0.2);
+      background: rgba(128, 0, 128, 0.2);
       animation: pulse 2s infinite;
     }
-    @keyframes pulse {
-      0% { transform: scale(0.5); opacity: 1; }
-      100% { transform: scale(2); opacity: 0; }
-    }
-    .loading-overlay {
+    /* Legend styles */
+    .map-legend {
       position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(255,255,255,0.9);
-      padding: 10px 20px;
-      border-radius: 20px;
-      font-size: 12px;
-      z-index: 1000;
-      display: none;
+      top: 18px;
+      right: 18px;
+      background: rgba(255,255,255,0.98);
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+      padding: 16px 22px 16px 18px;
+      font-size: 14px;
+      z-index: 1200;
+      min-width: 140px;
+      border: 1px solid #eee;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .legend-label { font-size: 14px; color: #1a1a1a; font-weight: 500; }
+    .legend-dot {
+      display: inline-block;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      margin-right: 7px;
+      vertical-align: middle;
+      border: 2px solid #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    }
+    .legend-dot-stop { background: linear-gradient(234.6deg, #FCAA12 21.63%, #D94B2E 70.54%); }
+    .legend-dot-place { background: #C41E3A; }
+    .legend-dot-sponsored { background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%); }
+    .legend-dot-user { background: #4285F4; box-shadow: 0 0 0 4px rgba(66,133,244,0.18); }
+    .legend-dot-user { position: relative; }
+    .legend-dot-user::after { content: ''; position: absolute; left: 50%; top: 50%; width: 32px; height: 32px; background: rgba(66,133,244,0.13); border-radius: 50%; transform: translate(-50%,-50%); z-index: 0; }
+    .legend-dot-user span { position: relative; z-index: 1; }
+    .legend-dot-stop span { position: relative; z-index: 1; }
+    .legend-dot-stop { display: flex; align-items: center; justify-content: center; }
+    .legend-dot-stop span { color: #fff; font-size: 13px; font-weight: bold; }
+    .legend-dot-nav { background: #4285F4; border: 2px solid #fff; box-shadow: 0 0 0 2px #4285F4; opacity: 0.7; }
+    .legend-line {
+      display: inline-block;
+      width: 28px;
+      height: 4px;
+      border-radius: 2px;
+      margin-right: 7px;
+      vertical-align: middle;
+    }
+    .legend-line-route { background: #E45C12; }
+    .legend-line-nav { background: #4285F4; opacity: 0.7; }
+  </style>
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <!-- Map Legend -->
+  <div class="map-legend">
+    <div class="legend-row"><span class="legend-line legend-line-route"></span><span class="legend-label">Route</span></div>
+    <div class="legend-row"><span class="legend-line legend-line-nav"></span><span class="legend-label">Navigation Path</span></div>
+  </div>
   <div id="loading" class="loading-overlay">Loading route...</div>
   <script>
     // Default center (Bhaktapur area)
@@ -313,6 +363,12 @@ const getMapHTML = (markers: MapMarker[], showRouteLine: boolean = true, routeCo
       if (window.navigationLine) {
         map.removeLayer(window.navigationLine);
       }
+      if (window.navigationDots) {
+        window.navigationDots.forEach(function(dot) { map.removeLayer(dot); });
+        window.navigationDots = [];
+      } else {
+        window.navigationDots = [];
+      }
       if (!isValidCoord({lat: userLat, lng: userLng}) || !isValidCoord({lat: destLat, lng: destLng})) {
         console.warn('Invalid navigation coordinates');
         return;
@@ -321,10 +377,21 @@ const getMapHTML = (markers: MapMarker[], showRouteLine: boolean = true, routeCo
         { lat: userLat, lng: userLng },
         { lat: destLat, lng: destLng }
       );
+      // Draw blue dots along the navigation route
+      for (var i = 0; i < routeCoords.length; i += Math.max(1, Math.floor(routeCoords.length / 20))) {
+        var dot = L.circleMarker(routeCoords[i], {
+          radius: 5,
+          color: '#4285F4',
+          fillColor: '#4285F4',
+          fillOpacity: 0.7,
+          weight: 0
+        }).addTo(map);
+        window.navigationDots.push(dot);
+      }
       window.navigationLine = L.polyline(routeCoords, {
         color: '#4285F4',
-        weight: 5,
-        opacity: 0.85,
+        weight: 4,
+        opacity: 0.7,
         dashArray: '10, 10',
         lineCap: 'round',
         lineJoin: 'round'
@@ -336,6 +403,10 @@ const getMapHTML = (markers: MapMarker[], showRouteLine: boolean = true, routeCo
       if (window.navigationLine) {
         map.removeLayer(window.navigationLine);
         window.navigationLine = null;
+      }
+      if (window.navigationDots) {
+        window.navigationDots.forEach(function(dot) { map.removeLayer(dot); });
+        window.navigationDots = [];
       }
     };
     
@@ -383,11 +454,34 @@ const getMapHTML = (markers: MapMarker[], showRouteLine: boolean = true, routeCo
         map.fitBounds(bounds, { padding: [50, 50] });
       }
     };
+    
+    // User Trail Logic
+    window.userTrailLine = null;
+    
+    window.startUserTrail = function(lat, lng) {
+      if (window.userTrailLine) map.removeLayer(window.userTrailLine);
+      window.userTrailLine = L.polyline([[lat, lng]], {
+        color: '#8A2BE2', // BlueViolet
+        weight: 4,
+        opacity: 0.8,
+        lineCap: 'round',
+        lineJoin: 'round'
+      }).addTo(map);
+    };
+    
+    window.updateUserTrail = function(lat, lng) {
+      if (window.userTrailLine) {
+        window.userTrailLine.addLatLng([lat, lng]);
+      } else {
+        window.startUserTrail(lat, lng);
+      }
+    };
   </script>
 </body>
 </html>
 `;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const FilterChip = ({ label, active, onPress }: { label: string; active?: boolean; onPress?: () => void }) => (
   <TouchableOpacity style={styles.filterChip} onPress={onPress} activeOpacity={0.7}>
     <LinearGradient
@@ -406,11 +500,15 @@ const RouteStopItem = ({
   isFirst,
   isLast,
   onRecenter,
+  expanded,
+  onToggleExpand,
 }: {
   stop: DisplayStop;
   isFirst: boolean;
   isLast: boolean;
   onRecenter: (lat: number, lng: number) => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) => {
   const getStepIndicator = () => {
     if (stop.completed) {
@@ -456,37 +554,155 @@ const RouteStopItem = ({
         )}
       </View>
       <View style={styles.stopContent}>
-        <Text style={[styles.stopName, !stop.completed && !stop.current && styles.futureStopName]}>
-          {stop.name}
-        </Text>
-        {stop.description ? (
+        <TouchableOpacity onPress={onToggleExpand} activeOpacity={0.7}>
+          <Text style={[styles.stopName, !stop.completed && !stop.current && styles.futureStopName]}>
+            {stop.name}
+            <Ionicons
+              name={expanded ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color="#E45C12"
+              style={{ marginLeft: 6 }}
+            />
+          </Text>
+        </TouchableOpacity>
+        {expanded && stop.description ? (
           <Text style={styles.stopDescription}>{stop.description}</Text>
         ) : null}
-        </View>
-        <View style={styles.navigationButtons}>
-          <TouchableOpacity
-            style={styles.navButton}
-            onPress={() => onRecenter(stop.lat, stop.lng)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="location" size={16} color="#000" style={{ marginRight: 6 }} />
-          </TouchableOpacity>
-        </View>
-      
+      </View>
+      <View style={styles.navigationButtons}>
+        <TouchableOpacity
+          style={styles.navButton}
+          onPress={() => onRecenter(stop.lat, stop.lng)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="location" size={16} color="#000" style={{ marginRight: 6 }} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 };
 
+
 export default function ExploreScreen() {
+  const { user } = useAuth();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ type?: string; id?: string; slug?: string }>();
+  const router = useRouter();
+  const params = useLocalSearchParams<{ type?: string; id?: string; slug?: string; eventLat?: string; eventLng?: string; eventName?: string; eventAddress?: string; eventDescription?: string; eventCategory?: string; eventDate?: string }>();
+
+
+  // Handle event params to show event as selected place
+  // Prevent repeated reloads for the same event params
+  const lastEventParams = useRef<{lat?: string, lng?: string, name?: string} | null>(null);
+  useEffect(() => {
+    if (params.eventLat && params.eventLng && params.eventName) {
+      const isSame =
+        lastEventParams.current &&
+        lastEventParams.current.lat === params.eventLat &&
+        lastEventParams.current.lng === params.eventLng &&
+        lastEventParams.current.name === params.eventName;
+      if (isSame) return;
+      lastEventParams.current = {
+        lat: params.eventLat,
+        lng: params.eventLng,
+        name: params.eventName,
+      };
+      // Create a pseudo-place for the event
+      const eventPlace = {
+        _id: params.id || 'event',
+        name: params.eventName,
+        slug: params.id || 'event',
+        description: params.eventDescription || '',
+        category: params.eventCategory || '',
+        coordinates: {
+          lat: Number(params.eventLat),
+          lng: Number(params.eventLng),
+        },
+        imageUrl: '',
+        gallery: [],
+        videoUrl: '',
+        address: params.eventAddress || '',
+        openingHours: '',
+        entryFee: undefined,
+        tags: [],
+        hasWorkshop: false,
+        isSponsored: false,
+        isEvent: true,
+        eventDate: params.eventDate || '',
+      };
+      setSelectedPlace(eventPlace);
+      setSelectedTrail(null);
+      setDisplayStops([]);
+      setCurrentStopIndex(0);
+      setMapMarkers([
+        {
+          id: `event-${eventPlace._id}`,
+          name: eventPlace.name,
+          lat: eventPlace.coordinates.lat,
+          lng: eventPlace.coordinates.lng,
+          type: 'place' as const,
+        },
+      ]);
+      setShowDetail(true);
+      // Removed setMapKey - markers are now updated via JS injection
+    }
+  }, [params.eventLat, params.eventLng, params.eventName, params.id, params.eventDescription, params.eventAddress, params.eventCategory, params.eventDate]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [searchQuery, setSearchQuery] = useState('');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isTracking, setIsTracking] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const webViewRef = useRef<WebView>(null);
+  const viewShotRef = useRef<ViewShot>(null);
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
+  
+  // Walk Tracking State
+  const [walkTimer, setWalkTimer] = useState(0);
+  const [walkLocations, setWalkLocations] = useState<{lat: number, lng: number}[]>([]);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveTitle, setSaveTitle] = useState('');
+  const [saveCaption, setSaveCaption] = useState('');
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [isSavingWalk, setIsSavingWalk] = useState(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Timer Logic
+  useEffect(() => {
+    if (isNavigating) {
+      timerRef.current = setInterval(() => {
+        setWalkTimer(t => t + 1);
+      }, 1000) as unknown as NodeJS.Timeout;
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isNavigating]);
+
+  // Compute stats
+  const walkStats = useMemo(() => {
+    let distance = 0;
+    if (walkLocations.length > 1) {
+      for (let i = 1; i < walkLocations.length; i++) {
+        // Simple Haversine approx or use library
+        const R = 6371e3; // meters
+        const φ1 = walkLocations[i-1].lat * Math.PI/180;
+        const φ2 = walkLocations[i].lat * Math.PI/180;
+        const Δφ = (walkLocations[i].lat-walkLocations[i-1].lat) * Math.PI/180;
+        const Δλ = (walkLocations[i].lng-walkLocations[i-1].lng) * Math.PI/180;
+        const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                  Math.cos(φ1) * Math.cos(φ2) *
+                  Math.sin(Δλ/2) * Math.sin(Δλ/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        distance += R * c;
+      }
+    }
+    return {
+      distance, // meters
+      steps: Math.floor(distance * 1.31), // approx steps
+      calories: Math.floor(distance * 0.04), // approx calories
+      avgSpeed: walkTimer > 0 ? (distance / walkTimer) * 3.6 : 0 // km/h
+    };
+  }, [walkLocations, walkTimer]);
 
   // Data state
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -494,18 +710,26 @@ export default function ExploreScreen() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [availableTrails, setAvailableTrails] = useState<Trail[]>([]);
   const [selectedTrail, setSelectedTrail] = useState<Trail | null>(null);
-  const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
+  // Extended Place type to include event properties
+  const [selectedPlace, setSelectedPlace] = useState<(Place & { isEvent?: boolean; eventDate?: string }) | null>(null);
   const [displayStops, setDisplayStops] = useState<DisplayStop[]>([]);
   const [mapMarkers, setMapMarkers] = useState<MapMarker[]>([]);
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [activeFilter, setActiveFilter] = useState<string>('Roadmaps');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [mapKey, setMapKey] = useState(0);
   const [routeColor, setRouteColor] = useState('#E45C12');
   // New state for bottom sheet visibility
-  const [showDetail, setShowDetail] = useState(true);
+  const isDirectVisit = !(
+    params.type || params.id || params.slug || params.eventLat || params.eventLng
+  );
+  const [showDetail, setShowDetail] = useState(!isDirectVisit);
+  // Collapsible state for stops
+  const [expandedStopIndex, setExpandedStopIndex] = useState(-1);
 
   // Select a trail and prepare display stops
   const selectTrail = useCallback((trail: Trail) => {
@@ -558,7 +782,7 @@ export default function ExploreScreen() {
     
     setDisplayStops(stops);
     setMapMarkers(markers);
-    setMapKey(prev => prev + 1);
+    // Removed setMapKey - markers are now updated via JS injection
   }, []);
 
   // Select a place (single destination)
@@ -589,39 +813,73 @@ export default function ExploreScreen() {
     }];
 
     setMapMarkers(markers);
-    setMapKey(prev => prev + 1);
+    // Removed setMapKey - markers are now updated via JS injection
   }, []);
 
-  // Start navigation from user to first stop
+  // Start navigation from user to first stop and START WALKING
   const startNavigation = useCallback(() => {
     if (!userLocation) {
       Alert.alert('Location Required', 'Please enable location services to start navigation.');
       return;
     }
     
-    if (displayStops.length === 0) {
-      Alert.alert('No Stops', 'Please select a trail with stops to navigate.');
-      return;
-    }
-    
-    const firstStop = displayStops[0];
-    setIsNavigating(true);
-    
-    // Draw navigation route from user to first stop
-    if (webViewRef.current) {
-      webViewRef.current.injectJavaScript(`
-        if (window.drawNavigationRoute) {
-          window.drawNavigationRoute(${userLocation.lat}, ${userLocation.lng}, ${firstStop.lat}, ${firstStop.lng});
-        }
-        true;
-      `);
-    }
-  }, [userLocation, displayStops]);
+    // if (displayStops.length === 0 && !selectedPlace) { ... } // Optional check
 
-  // Stop navigation
-  const stopNavigation = useCallback(() => {
+    setIsNavigating(true);
+    setWalkTimer(0);
+    setWalkLocations([userLocation]); // Start with current location
+    
+    // Draw navigation route on map (suggested path)
+    if (displayStops.length > 0 && webViewRef.current) {
+       const firstStop = displayStops[0];
+       webViewRef.current.injectJavaScript(`
+          if (window.drawNavigationRoute) {
+            window.drawNavigationRoute(${userLocation.lat}, ${userLocation.lng}, ${firstStop.lat}, ${firstStop.lng});
+          }
+          if (window.startUserTrail) {
+            window.startUserTrail(${userLocation.lat}, ${userLocation.lng});
+          }
+          true;
+       `);
+    } else if (webViewRef.current) {
+       // Just start trail if no suggested path
+       webViewRef.current.injectJavaScript(`
+          if (window.startUserTrail) {
+            window.startUserTrail(${userLocation.lat}, ${userLocation.lng});
+          }
+          true;
+       `);
+    }
+    
+    // Stay on this screen
+  }, [userLocation, displayStops, selectedTrail, selectedPlace]);
+
+  // Stop navigation and save walk
+  const stopNavigation = useCallback(async () => {
     setIsNavigating(false);
     
+    // Stop timer
+    if (timerRef.current) clearInterval(timerRef.current);
+    
+    // Capture Snapshot of the map
+    try {
+      if (viewShotRef.current) {
+         const uri = await viewShotRef.current?.capture();
+         // Convert to base64 if needed, or upload. For simplicity we'll pass URI to modal
+         // But API expects base64 or hosted URL. 
+         // view-shot can capture to data-uri.
+         const base64 = await captureRef(viewShotRef, {
+            format: "jpg",
+            quality: 0.8,
+            result: "base64"
+         });
+         setCapturedImage(`data:image/jpeg;base64,${base64}`);
+      }
+    } catch (e) {
+      console.error("Snapshot failed", e);
+      Alert.alert("Error", "Could not capture map image.");
+    }
+
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(`
         if (window.clearNavigationRoute) {
@@ -630,7 +888,14 @@ export default function ExploreScreen() {
         true;
       `);
     }
+    
+    // Open Save Modal
+    setShowSaveModal(true);
   }, []);
+
+
+
+  // Start navigation to a place (single destination)
 
   // Start navigation to a place (single destination)
   const startPlaceNavigation = useCallback(() => {
@@ -645,12 +910,17 @@ export default function ExploreScreen() {
     }
     
     setIsNavigating(true);
+    setWalkTimer(0);
+    setWalkLocations([userLocation]);
     
-    // Draw navigation route from user to place
+    // Draw navigation route from user to place AND start user trail
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(`
         if (window.drawNavigationRoute) {
           window.drawNavigationRoute(${userLocation.lat}, ${userLocation.lng}, ${selectedPlace.coordinates.lat}, ${selectedPlace.coordinates.lng});
+        }
+        if (window.startUserTrail) {
+            window.startUserTrail(${userLocation.lat}, ${userLocation.lng});
         }
         true;
       `);
@@ -721,7 +991,62 @@ export default function ExploreScreen() {
     }
   }, [selectTrail, selectPlace, params.type, params.id, params.slug]);
 
+  const handleSaveWalk = async () => {
+    if (!saveTitle.trim()) {
+        Alert.alert("Title Required", "Please enter a title for your walk.");
+        return;
+    }
+
+    if (!capturedImage) {
+        Alert.alert("Snapshot Missing", "Map image is not ready. Please try again or re-record.");
+        return;
+    }
+    
+    setIsSavingWalk(true);
+    try {
+        if (!user) {
+            Alert.alert("Error", "You must be logged in to save a walk.");
+            setIsSavingWalk(false);
+            return;
+        }
+
+        await api.createWalk({
+            userId: user._id,
+            mapImage: capturedImage,
+            timeRecorded: walkTimer,
+            title: saveTitle,
+            caption: saveCaption,
+            stats: walkStats
+        });
+        
+        setShowSaveModal(false);
+        setSaveTitle('');
+        setSaveCaption('');
+        setCapturedImage(null);
+        if (webViewRef.current) {
+             webViewRef.current.injectJavaScript(`
+                if (window.clearNavigationRoute) window.clearNavigationRoute();
+                if (window.userTrailLine) map.removeLayer(window.userTrailLine);
+                window.userTrailLine = null;
+                true;
+             `);
+        }
+        setWalkLocations([]);
+        Alert.alert("Success", "Walk saved to your collection!");
+        
+        // Refresh triggers
+        fetchData(true);
+    } catch (e: any) {
+        const errorMessage = e?.message || "Failed to save walk.";
+        Alert.alert("Error", errorMessage);
+        console.error("Save walk error:", e);
+    } finally {
+        setIsSavingWalk(false);
+    }
+  };
+
   // Navigate between stops
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleNavigate = useCallback((direction: 'prev' | 'next') => {
     setDisplayStops(prevStops => {
       const newIndex = direction === 'next' 
@@ -787,10 +1112,12 @@ export default function ExploreScreen() {
     return () => clearTimeout(timer);
   }, [searchQuery, handleSearch]);
 
-  // Initial fetch
+  // Initial fetch: only run if no event params
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (!(params.eventLat && params.eventLng && params.eventName)) {
+      fetchData();
+    }
+  }, [fetchData, params.eventLat, params.eventLng, params.eventName]);
 
   // Request location permissions and start tracking
   useEffect(() => {
@@ -845,8 +1172,8 @@ export default function ExploreScreen() {
       locationSubscription.current = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
-          timeInterval: 1000, // Update every 1 seconds
-          distanceInterval: 1, // Or when moved 10 meters
+          timeInterval: 1000, 
+          distanceInterval: 1, 
         },
         (newLocation) => {
           const newCoords = {
@@ -855,12 +1182,17 @@ export default function ExploreScreen() {
           };
           setUserLocation(newCoords);
           
-          // Update marker position in WebView (do NOT recenter)
+          if (isNavigating) {
+             setWalkLocations(prev => [...prev, newCoords]);
+          }
+
+          // Update marker position in WebView
           if (webViewRef.current) {
             webViewRef.current.injectJavaScript(`
               if (window.updateUserLocation) {
                 window.updateUserLocation(${newCoords.lat}, ${newCoords.lng});
               }
+              ${isNavigating ? `if (window.updateUserTrail) { window.updateUserTrail(${newCoords.lat}, ${newCoords.lng}); }` : ''}
               true;
             `);
           }
@@ -883,23 +1215,24 @@ export default function ExploreScreen() {
     }
   };
 
-  // Map container style: full screen if detail is hidden
-  const mapContainerStyle = [
+  // Map container style: full screen if detail is hidden (reserved for future use)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _mapContainerStyle: ViewStyle[] = [
     styles.mapContainer,
-    !showDetail && {
-      position: 'absolute',
+    ...(!showDetail ? [{
+      position: 'absolute' as const,
       top: 0,
       left: 0,
       right: 0,
       bottom: 0,
-      height: '100%',
+      height: '100%' as unknown as number,
       zIndex: 50,
       backgroundColor: '#fff',
-    },
+    }] : []),
   ];
 
-  // Improved recenter button style
-  const recenterButtonStyle = {
+  // Improved recenter button style with proper typing
+  const recenterButtonStyle: ViewStyle = {
     position: 'absolute',
     bottom: showDetail ? 60 : 30,
     right: 20,
@@ -919,290 +1252,551 @@ export default function ExploreScreen() {
     borderColor: '#E5E5E5',
   };
 
-  return (
-    <View style={[styles.container, { paddingTop: insets.top }]}> 
-      {/* Map Section */}
-      <View style={mapContainerStyle}>
-        <WebView
-          key={mapKey}
-          ref={webViewRef}
-          source={{ html: getMapHTML(mapMarkers, !!selectedTrail, routeColor) }}
-          style={[styles.map, !showDetail && { height: '100%' }]}
-          scrollEnabled={false}
-          javaScriptEnabled={true}
-          domStorageEnabled={true}
-        />
-        {/* Improved Center on user button */}
-        <TouchableOpacity style={recenterButtonStyle} onPress={centerOnUser} activeOpacity={0.8}>
-          <Ionicons 
-            name={isTracking ? "navigate" : "navigate-outline"} 
-            size={26} 
-            color={userLocation ? "#4285F4" : "#999"} 
+  // Inject user location as a marker for initial map load if available
+  // Only include static markers - user location is handled via JS injection
+  const stableMapMarkers = useMemo(() => {
+    return mapMarkers;
+  }, [mapMarkers]);
+
+  // Memoize the map HTML to prevent unnecessary re-renders
+  const mapHTML = useMemo(() => {
+    return getMapHTML(stableMapMarkers, !!selectedTrail, routeColor);
+  }, [stableMapMarkers, selectedTrail, routeColor]);
+
+  // Update markers via JS injection when markers change (instead of re-rendering WebView)
+  useEffect(() => {
+    if (webViewRef.current && mapMarkers.length > 0) {
+      const markersJSON = JSON.stringify(mapMarkers);
+      webViewRef.current.injectJavaScript(`
+        if (window.updateMarkers) {
+          window.updateMarkers(${markersJSON}, ${!!selectedTrail}, '${routeColor}');
+        }
+        true;
+      `);
+    }
+  }, [mapMarkers, selectedTrail, routeColor]);
+
+  // Hide all details UI if direct visit
+  if (isDirectVisit) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top, flex: 1 }]}> 
+        <View style={{ flex: 1 }}>
+          <WebView
+            key="explore-map-direct"
+            ref={webViewRef}
+            source={{ html: getMapHTML([], false, routeColor) }}
+            style={[styles.map, { flex: 1 }]}
+            scrollEnabled={false}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
           />
-        </TouchableOpacity>
-
-        {/* Hide search/filter UI if detail is hidden */}
-        {showDetail && <>
-        {/* Search Bar */}
-        <View style={styles.searchContainer}>
-          <View style={styles.searchBar}>
-            <Ionicons name="search" size={24} color="#000" style={styles.searchIcon} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search places & roadmaps..."
-              placeholderTextColor="rgba(33, 37, 41, 0.46)"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              returnKeyType="search"
-              autoCorrect={false}
+          {/* Center on user button */}
+          <TouchableOpacity style={recenterButtonStyle} onPress={centerOnUser} activeOpacity={0.8}>
+            <Ionicons 
+              name={isTracking ? "navigate" : "navigate-outline"} 
+              size={26} 
+              color={userLocation ? "#4285F4" : "#999"} 
             />
-            <TouchableOpacity style={styles.filterButton} activeOpacity={0.7}>
-              <LinearGradient
-                colors={['#FDAA2E', '#EE5C19']}
-                style={styles.filterButtonGradient}
-              >
-                <Ionicons name="options-outline" size={20} color="#fff" />
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-        
-        {/* Location error indicator */}
-        {locationError && (
-          <View style={styles.locationError}>
-            <Ionicons name="warning" size={16} color="#E45C12" />
-            <Text style={styles.locationErrorText}>{locationError}</Text>
-          </View>
-        )}
-        </>}
-      </View>
-
-      {/* Show button to reappear detail page if hidden */}
-      {!showDetail && (
-        <TouchableOpacity
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            bottom: 30,
-            alignItems: 'center',
-            zIndex: 20,
-          }}
-          onPress={() => setShowDetail(true)}
-        >
-          <View style={{
-            backgroundColor: '#fff',
-            borderRadius: 20,
-            paddingHorizontal: 24,
-            paddingVertical: 12,
-            flexDirection: 'row',
-            alignItems: 'center',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.1,
-            shadowRadius: 8,
-            elevation: 5,
-          }}>
-            <Ionicons name="chevron-up" size={22} color="#E45C12" />
-            <Text style={{ color: '#E45C12', fontWeight: '600', fontSize: 16, marginLeft: 8 }}>Show Details</Text>
-          </View>
-        </TouchableOpacity>
-      )}
-
-      {/* Bottom Sheet with Trail/Place Info */}
-      {showDetail && (
-        <View style={styles.bottomSheet}>
-          {/* Cross button to hide detail page */}
-          <TouchableOpacity
-            style={{
-              position: 'absolute',
-              right: 18,
-              top: 18,
-              zIndex: 20,
-              backgroundColor: '#fff',
-              borderRadius: 16,
-              width: 32,
-              height: 32,
-              justifyContent: 'center',
-              alignItems: 'center',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.1,
-              shadowRadius: 8,
-              elevation: 5,
-            }}
-            onPress={() => setShowDetail(false)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="close" size={20} color="#E45C12" />
           </TouchableOpacity>
-          {isLoading ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#E45C12" />
-              <Text style={styles.loadingText}>Loading data...</Text>
-            </View>
-          ) : error ? (
-            <View style={styles.errorContainer}>
-              <Ionicons name="alert-circle" size={48} color="#E45C12" />
-              <Text style={styles.errorText}>{error}</Text>
-              <TouchableOpacity style={styles.retryButton} onPress={() => fetchData()}>
-                <Text style={styles.retryButtonText}>Retry</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.container, { paddingTop: insets.top, flex: 1 }]}> 
+      <View style={{ flex: 1, flexDirection: 'column' }}>
+        {/* Map Section (top 50%) */}
+        <View style={{ flex: 1 }}>
+          <ViewShot ref={viewShotRef} options={{ format: "jpg", quality: 0.9 }} style={{ flex: 1, paddingBottom: !showDetail ? 70 : 0 }}>
+             {/* Stats Overlay during Walk */}
+             {isNavigating && (
+                <View style={[styles.walkOverlay, { top: insets.top + 10 }]}>
+                    <View style={styles.statItem}>
+                        <Text style={styles.statLabel}>Time</Text>
+                        <Text style={styles.statValue}>{new Date(walkTimer * 1000).toISOString().substr(11, 8)}</Text>
+                    </View>
+                    <View style={styles.statItem}>
+                        <Text style={styles.statLabel}>Dist</Text>
+                        <Text style={styles.statValue}>{(walkStats.distance / 1000).toFixed(2)} km</Text>
+                    </View>
+                </View>
+             )}
+
+            <WebView
+              key="explore-map-main"
+              ref={webViewRef}
+              source={{ html: mapHTML }}
+              style={[styles.map, { flex: 1 }]}
+              scrollEnabled={false}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              onLoadEnd={() => {
+                // ...
+              }}
+            />
+          </ViewShot>
+          {/* Improved Center on user button */}
+          <TouchableOpacity style={recenterButtonStyle} onPress={centerOnUser} activeOpacity={0.8}>
+            <Ionicons 
+              name={isTracking ? "navigate" : "navigate-outline"} 
+              size={26} 
+              color={userLocation ? "#4285F4" : "#999"} 
+            />
+          </TouchableOpacity>
+
+          {/* Hide search/filter UI if detail is hidden */}
+          {showDetail && <>
+          {/* Search Bar */}
+          {/* <View style={styles.searchContainer}>
+            <View style={styles.searchBar}>
+              <Ionicons name="search" size={24} color="#000" style={styles.searchIcon} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search places & roadmaps..."
+                placeholderTextColor="rgba(33, 37, 41, 0.46)"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                returnKeyType="search"
+                autoCorrect={false}
+              />
+              <TouchableOpacity style={styles.filterButton} activeOpacity={0.7}>
+                <LinearGradient
+                  colors={['#FDAA2E', '#EE5C19']}
+                  style={styles.filterButtonGradient}
+                >
+                  <Ionicons name="options-outline" size={20} color="#fff" />
+                </LinearGradient>
               </TouchableOpacity>
             </View>
-          ) : (
-            <ScrollView 
-              showsVerticalScrollIndicator={false} 
-              contentContainerStyle={styles.bottomSheetContent}
-              refreshControl={
-                <RefreshControl
-                  refreshing={isRefreshing}
-                  onRefresh={() => fetchData(true)}
-                  colors={['#E45C12']}
-                  tintColor="#E45C12"
-                />
-              }
-            >
-              {/* ...existing code for Trail/Place/Empty views... */}
-              {selectedTrail && (
-                <>
-                  <View style={styles.trailHeader}>
-                    {selectedTrail.icon && (
-                      <Text style={styles.trailIcon}>{selectedTrail.icon}</Text>
-                    )}
-                    <Text style={styles.routeTitle}>{selectedTrail.name}</Text>
-                  </View>
-                  {selectedTrail.description ? (
-                    <Text style={styles.routeDescription}>{selectedTrail.description}</Text>
-                  ) : null}
-                  <View style={styles.routeMetaContainer}>
-                    {selectedTrail.duration && (
-                      <View style={styles.routeMeta}>
-                        <Ionicons name="time-outline" size={14} color="#666" />
-                        <Text style={styles.routeMetaText}>{selectedTrail.duration}</Text>
-                      </View>
-                    )}
-                    {selectedTrail.distance && (
-                      <View style={styles.routeMeta}>
-                        <Ionicons name="walk-outline" size={14} color="#666" />
-                        <Text style={styles.routeMetaText}>{selectedTrail.distance}</Text>
-                      </View>
-                    )}
-                    {selectedTrail.difficulty && (
-                      <View style={styles.routeMeta}>
-                        <Ionicons name="fitness-outline" size={14} color="#666" />
-                        <Text style={styles.routeMetaText}>{selectedTrail.difficulty}</Text>
-                      </View>
-                    )}
-                    <View style={styles.routeMeta}>
-                      <Ionicons name="location-outline" size={14} color="#666" />
-                      <Text style={styles.routeMetaText}>{selectedTrail.stops.length} stops</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.stopsTitle}>Roadmap Stops:</Text>
-                  {displayStops.map((stop, index) => (
-                    <RouteStopItem
-                      key={`stop-${index}`}
-                      stop={stop}
-                      isFirst={index === 0}
-                      isLast={index === displayStops.length - 1}
-                      onRecenter={(lat, lng) => {
-                        if (webViewRef.current) {
-                          webViewRef.current.injectJavaScript(`
-                            if (window.map) { window.map.setView([${lat}, ${lng}], window.map.getZoom()); }
-                            true;
-                          `);
-                        }
-                      }}
-                    />
-                  ))}
-                  {/* Navigation Button */}
-                  <TouchableOpacity 
-                    style={styles.startNavigationButton}
-                    onPress={isNavigating ? stopNavigation : startNavigation}
-                    activeOpacity={0.8}
-                  >
-                    <LinearGradient
-                      colors={isNavigating ? ['#666', '#444'] : ['#FDAA2E', '#EE5C19']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={styles.navigationButtonGradient}
-                    >
-                      <Ionicons 
-                        name={isNavigating ? "stop-circle" : "navigate"} 
-                        size={20} 
-                        color="#fff" 
-                      />
-                      <Text style={styles.navigationButtonText}>
-                        {isNavigating ? 'Stop Navigation' : 'Start Navigation'}
-                      </Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </>
-              )}
-              {selectedPlace && !selectedTrail && (
-                <>
-                  <Text style={styles.routeTitle}>{selectedPlace.name}</Text>
-                  {selectedPlace.description ? (
-                    <Text style={styles.routeDescription}>{selectedPlace.description}</Text>
-                  ) : null}
-                  <View style={styles.routeMetaContainer}>
-                    {selectedPlace.category && (
-                      <View style={styles.routeMeta}>
-                        <Ionicons name="pricetag-outline" size={14} color="#666" />
-                        <Text style={styles.routeMetaText}>{selectedPlace.category}</Text>
-                      </View>
-                    )}
-                    {selectedPlace.openingHours && (
-                      <View style={styles.routeMeta}>
-                        <Ionicons name="time-outline" size={14} color="#666" />
-                        <Text style={styles.routeMetaText}>{selectedPlace.openingHours}</Text>
-                      </View>
-                    )}
-                    {selectedPlace.hasWorkshop && (
-                      <View style={[styles.routeMeta, styles.workshopBadge]}>
-                        <Ionicons name="construct-outline" size={14} color="#fff" />
-                        <Text style={[styles.routeMetaText, { color: '#fff' }]}>Workshop</Text>
-                      </View>
-                    )}
-                  </View>
-                  {selectedPlace.address && (
-                    <View style={styles.addressContainer}>
-                      <Ionicons name="location-outline" size={16} color="#666" />
-                      <Text style={styles.addressText}>{selectedPlace.address}</Text>
-                    </View>
-                  )}
-                  {selectedPlace.entryFee && (
-                    <View style={styles.entryFeeContainer}>
-                      <Text style={styles.entryFeeTitle}>Entry Fee:</Text>
-                      <Text style={styles.entryFeeText}>
-                        Foreign: NPR {selectedPlace.entryFee.foreign} | SAARC: NPR {selectedPlace.entryFee.saarc}
-                      </Text>
-                    </View>
-                  )}
-                  <TouchableOpacity 
-                    style={styles.navigateButton}
-                    onPress={isNavigating ? stopNavigation : startPlaceNavigation}
-                  >
-                    <Ionicons name={isNavigating ? "stop-circle" : "navigate"} size={20} color="#fff" />
-                    <Text style={styles.navigateButtonText}>{isNavigating ? 'Stop Navigation' : 'Get Directions'}</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-              {!selectedTrail && !selectedPlace && !isLoading && (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="map-outline" size={48} color="#999" />
-                  <Text style={styles.emptyText}>Select a trail or place to explore</Text>
-                </View>
-              )}
-            </ScrollView>
+          </View> */}
+          
+          {/* Location error indicator */}
+          {locationError && (
+            <View style={styles.locationError}>
+              <Ionicons name="warning" size={16} color="#E45C12" />
+              <Text style={styles.locationErrorText}>{locationError}</Text>
+            </View>
           )}
+          </>}
         </View>
-      )}
+
+        {/* Show button to reappear detail page if hidden */}
+        {!showDetail && (
+          <View
+            pointerEvents="box-none"
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 30,
+              alignItems: 'center',
+              zIndex: 999,
+            }}
+          >
+            <TouchableOpacity
+              style={{
+                backgroundColor: '#fff',
+                borderRadius: 20,
+                paddingHorizontal: 24,
+                paddingVertical: 12,
+                flexDirection: 'row',
+                alignItems: 'center',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.1,
+                shadowRadius: 8,
+                elevation: 5,
+              }}
+              onPress={() => setShowDetail(true)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="chevron-up" size={22} color="#E45C12" />
+              <Text style={{ color: '#E45C12', fontWeight: '600', fontSize: 16, marginLeft: 8 }}>Show Details</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Bottom Sheet with Trail/Place Info (bottom 50%) */}
+        {showDetail && (
+          <View style={[styles.bottomSheet, { flex: 1, maxHeight: '50%' }]}> 
+            {/* Cross button to hide detail page */}
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                right: 18,
+                top: 18,
+                zIndex: 20,
+                backgroundColor: '#fff',
+                borderRadius: 16,
+                width: 32,
+                height: 32,
+                justifyContent: 'center',
+                alignItems: 'center',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.1,
+                shadowRadius: 8,
+                elevation: 5,
+              }}
+              onPress={() => setShowDetail(false)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={20} color="#E45C12" />
+            </TouchableOpacity>
+            {isLoading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#E45C12" />
+                <Text style={styles.loadingText}>Loading data...</Text>
+              </View>
+            ) : error ? (
+              <View style={styles.errorContainer}>
+                <Ionicons name="alert-circle" size={48} color="#E45C12" />
+                <Text style={styles.errorText}>{error}</Text>
+                <TouchableOpacity style={styles.retryButton} onPress={() => fetchData()}>
+                  <Text style={styles.retryButtonText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <ScrollView 
+                showsVerticalScrollIndicator={false} 
+                contentContainerStyle={styles.bottomSheetContent}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={isRefreshing}
+                    onRefresh={() => fetchData(true)}
+                    colors={['#E45C12']}
+                    tintColor="#E45C12"
+                  />
+                }
+              >
+                {/* ...existing code for Trail/Place/Empty views... */}
+                {selectedTrail && (
+                  <>
+                    <View style={styles.trailHeader}>
+                      {selectedTrail.icon && (
+                        <Text style={styles.trailIcon}>{selectedTrail.icon}</Text>
+                      )}
+                      <Text style={styles.routeTitle}>{selectedTrail.name}</Text>
+                    </View>
+                    {selectedTrail.description ? (
+                      <Text style={styles.routeDescription}>{selectedTrail.description}</Text>
+                    ) : null}
+                    <View style={styles.routeMetaContainer}>
+                      {selectedTrail.duration && (
+                        <View style={styles.routeMeta}>
+                          <Ionicons name="time-outline" size={14} color="#666" />
+                          <Text style={styles.routeMetaText}>{selectedTrail.duration}</Text>
+                        </View>
+                      )}
+                      {selectedTrail.distance && (
+                        <View style={styles.routeMeta}>
+                          <Ionicons name="walk-outline" size={14} color="#666" />
+                          <Text style={styles.routeMetaText}>{selectedTrail.distance}</Text>
+                        </View>
+                      )}
+                      {selectedTrail.difficulty && (
+                        <View style={styles.routeMeta}>
+                          <Ionicons name="fitness-outline" size={14} color="#666" />
+                          <Text style={styles.routeMetaText}>{selectedTrail.difficulty}</Text>
+                        </View>
+                      )}
+                      <View style={styles.routeMeta}>
+                        <Ionicons name="location-outline" size={14} color="#666" />
+                        <Text style={styles.routeMetaText}>{selectedTrail.stops.length} stops</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.stopsTitle}>Roadmap Stops:</Text>
+                    {displayStops.map((stop, index) => (
+                      <RouteStopItem
+                        key={`stop-${index}`}
+                        stop={stop}
+                        isFirst={index === 0}
+                        isLast={index === displayStops.length - 1}
+                        onRecenter={(lat, lng) => {
+                          if (webViewRef.current) {
+                            webViewRef.current.injectJavaScript(`
+                              if (window.map) { window.map.setView([${lat}, ${lng}], window.map.getZoom()); }
+                              true;
+                            `);
+                          }
+                        }}
+                        expanded={expandedStopIndex === index}
+                        onToggleExpand={() => setExpandedStopIndex(expandedStopIndex === index ? -1 : index)}
+                      />
+                    ))}
+                    {/* Navigation Button */}
+                    <TouchableOpacity 
+                      style={styles.startNavigationButton}
+                      onPress={isNavigating ? stopNavigation : startNavigation}
+                      activeOpacity={0.8}
+                    >
+                      <LinearGradient
+                        colors={isNavigating ? ['#666', '#444'] : ['#FDAA2E', '#EE5C19']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.navigationButtonGradient}
+                      >
+                        <Ionicons 
+                          name={isNavigating ? "stop-circle" : "navigate"} 
+                          size={20} 
+                          color="#fff" 
+                        />
+                        <Text style={styles.navigationButtonText}>
+                          {isNavigating ? 'Stop Navigation' : 'Start Navigation'}
+                        </Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </>
+                )}
+                {selectedPlace && !selectedTrail && (
+                  <>
+                    <Text style={styles.routeTitle}>{selectedPlace.name}</Text>
+                    {selectedPlace.isEvent ? (
+                      <>
+                        {selectedPlace.description ? (
+                          <Text style={styles.routeDescription}>{selectedPlace.description}</Text>
+                        ) : null}
+                        <View style={styles.routeMetaContainer}>
+                          {selectedPlace.category && (
+                            <View style={styles.routeMeta}>
+                              <Ionicons name="pricetag-outline" size={14} color="#666" />
+                              <Text style={styles.routeMetaText}>{selectedPlace.category}</Text>
+                            </View>
+                          )}
+                          {selectedPlace.eventDate && (
+                            <View style={styles.routeMeta}>
+                              <Ionicons name="calendar-outline" size={14} color="#666" />
+                              <Text style={styles.routeMetaText}>{selectedPlace.eventDate}</Text>
+                            </View>
+                          )}
+                        </View>
+                        {selectedPlace.address && (
+                          <View style={styles.addressContainer}>
+                            <Ionicons name="location-outline" size={16} color="#666" />
+                            <Text style={styles.addressText}>{selectedPlace.address}</Text>
+                          </View>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {selectedPlace.description ? (
+                          <Text style={styles.routeDescription}>{selectedPlace.description}</Text>
+                        ) : null}
+                        <View style={styles.routeMetaContainer}>
+                          {selectedPlace.category && (
+                            <View style={styles.routeMeta}>
+                              <Ionicons name="pricetag-outline" size={14} color="#666" />
+                              <Text style={styles.routeMetaText}>{selectedPlace.category}</Text>
+                            </View>
+                          )}
+                          {selectedPlace.openingHours && (
+                            <View style={styles.routeMeta}>
+                              <Ionicons name="time-outline" size={14} color="#666" />
+                              <Text style={styles.routeMetaText}>{selectedPlace.openingHours}</Text>
+                            </View>
+                          )}
+                          {selectedPlace.hasWorkshop && (
+                            <View style={[styles.routeMeta, styles.workshopBadge]}>
+                              <Ionicons name="construct-outline" size={14} color="#fff" />
+                              <Text style={[styles.routeMetaText, { color: '#fff' }]}>Workshop</Text>
+                            </View>
+                          )}
+                        </View>
+                        {selectedPlace.address && (
+                          <View style={styles.addressContainer}>
+                            <Ionicons name="location-outline" size={16} color="#666" />
+                            <Text style={styles.addressText}>{selectedPlace.address}</Text>
+                          </View>
+                        )}
+                        {selectedPlace.entryFee && (
+                          <View style={styles.entryFeeContainer}>
+                            <Text style={styles.entryFeeTitle}>Entry Fee:</Text>
+                            <Text style={styles.entryFeeText}>
+                              Foreign: NPR {selectedPlace.entryFee.foreign} | SAARC: NPR {selectedPlace.entryFee.saarc}
+                            </Text>
+                          </View>
+                        )}
+                      </>
+                    )}
+                    <TouchableOpacity 
+                      style={styles.startNavigationButton}
+                      onPress={isNavigating ? stopNavigation : startPlaceNavigation}
+                      activeOpacity={0.8}
+                    >
+                      <LinearGradient
+                        colors={isNavigating ? ['#666', '#444'] : ['#FDAA2E', '#EE5C19']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.navigationButtonGradient}
+                      >
+                        <Ionicons 
+                          name={isNavigating ? "stop-circle" : "navigate"} 
+                          size={20} 
+                          color="#fff" 
+                        />
+                        <Text style={styles.navigationButtonText}>
+                          {isNavigating ? 'Stop Navigation' : 'Start Navigation'}
+                        </Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </>
+                )}
+                {!selectedTrail && !selectedPlace && !isLoading && (
+                  <View style={styles.emptyContainer}>
+                    <Ionicons name="map-outline" size={48} color="#999" />
+                    <Text style={styles.emptyText}>Select a trail or place to explore</Text>
+                  </View>
+                )}
+              </ScrollView>
+            )}
+          </View>
+        )}
+      </View>
+
+      {/* Save Walk Modal */}
+      <Modal visible={showSaveModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+            <View style={styles.saveModalContent}>
+                <Text style={styles.saveModalTitle}>Save Your Walk</Text>
+                {capturedImage && (
+                    <Image source={{ uri: capturedImage }} style={styles.capturedPreview} resizeMode="cover" />
+                )}
+                
+                <Text style={styles.saveStatText}>
+                    Duration: {new Date(walkTimer * 1000).toISOString().substr(11, 8)} • Dist: {(walkStats.distance / 1000).toFixed(2)} km
+                </Text>
+
+                <TextInput 
+                    placeholder="Title (e.g. Morning Walk)"
+                    style={styles.saveInput}
+                    value={saveTitle}
+                    onChangeText={setSaveTitle}
+                />
+                <TextInput 
+                    placeholder="Caption (Optional)"
+                    style={[styles.saveInput, { height: 80, textAlignVertical: 'top' }]}
+                    multiline
+                    value={saveCaption}
+                    onChangeText={setSaveCaption}
+                />
+
+                <TouchableOpacity 
+                    style={styles.saveButton}
+                    onPress={handleSaveWalk}
+                    disabled={isSavingWalk}
+                >
+                    {isSavingWalk ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveButtonText}>Save Journey</Text>}
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                    style={styles.cancelButton}
+                    onPress={() => setShowSaveModal(false)}
+                >
+                    <Text style={styles.cancelButtonText}>Discard</Text>
+                </TouchableOpacity>
+            </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  walkOverlay: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 16,
+    padding: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    zIndex: 100,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  statItem: {
+    alignItems: 'center',
+  },
+  statLabel: {
+    fontSize: 10,
+    color: '#666',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  statValue: {
+    fontSize: 18,
+    color: '#E45C12',
+    fontWeight: '700',
+  },
+  saveModalContent: {
+    backgroundColor: '#fff',
+    width: '90%',
+    borderRadius: 20,
+    padding: 24,
+    maxHeight: '80%',
+  },
+  saveModalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  capturedPreview: {
+    width: '100%',
+    height: 150,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  saveStatText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+    fontWeight: '500',
+  },
+  saveInput: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+  },
+  saveButton: {
+    backgroundColor: '#E45C12',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  cancelButton: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    color: '#666',
+    fontSize: 16,
+    fontWeight: '500',
+  },
   container: {
     flex: 1,
     backgroundColor: '#F5F6F7',

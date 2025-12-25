@@ -176,8 +176,64 @@ export interface Event {
   tags?: string[];
   isFeatured?: boolean;
   isActive?: boolean;
-  createdAt?: string;
   updatedAt?: string;
+}
+
+export interface Walking {
+  _id: string;
+  userId: string | { _id: string; name: string; avatar?: string };
+  mapImage: string;
+  timeRecorded: number;
+  title: string;
+  caption?: string;
+  stats?: {
+    distance: number;
+    calories: number;
+    steps: number;
+    avgSpeed: number;
+  };
+  isPublic?: boolean;
+  likes?: string[];
+  likesCount?: number;
+  commentsCount?: number;
+  createdAt: string;
+}
+
+export interface JourneyComment {
+  _id: string;
+  journeyId: string;
+  userId: {
+    _id: string;
+    name: string;
+    email: string;
+    avatar?: string;
+  };
+  text: string;
+  createdAt: string;
+}
+
+export interface Journey {
+  _id: string;
+  userId: string | { _id: string; name: string; email: string; avatar?: string };
+  title: string;
+  startTime: string;
+  endTime?: string;
+  duration?: number;
+  totalDuration?: number;
+  distance?: number;
+  totalDistance?: number;
+  coordinates: number[][];
+  trackImage?: { url: string } | null;
+  stats?: any;
+  status: 'active' | 'paused' | 'completed' | 'cancelled';
+  isPublic: boolean;
+  likes?: string[];
+  likesCount?: number;
+  commentsCount?: number;
+  location?: string;
+  createdAt: string;
+  completedAt?: string;
+  updatedAt: string;
 }
 
 interface RoutesResponse {
@@ -227,6 +283,248 @@ interface ApiError {
 }
 
 export const api = {
+  // Update user profile
+  updateUserProfile: async (data: any) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/user/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Fetch shared (private) journeys for a user (Your Trails)
+  getSharedJourneys: async (userId: string, page = 1, limit = 20) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(`${API_BASE_URL}/journeys/trails?userId=${userId}&page=${page}&limit=${limit}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to fetch shared journeys');
+      }
+      return result;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timed out.');
+      }
+      throw error;
+    }
+  },
+
+  // Fetch community (public) journeys
+  getCommunityJourneys: async (page = 1, limit = 20) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(`${API_BASE_URL}/journeys/community?page=${page}&limit=${limit}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to fetch community journeys');
+      }
+      return result;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timed out.');
+      }
+      throw error;
+    }
+  },
+
+  // Fetch all journeys for a user (both private and public)
+  getUserJourneys: async (userId: string, status?: string) => {
+    // ... removed logic? Or keep for older data? 
+    // User deleted backend files, so this might fail if called. 
+    // We'll keep method sig but it won't work without backend.
+    // For now, let's just add walking methods.
+    return { success: false, message: "Deprecated" }; 
+  },
+
+  // ===== Walking APIs =====
+  createWalk: async (data: any) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/walking`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  getCommunityWalks: async (page = 1, limit = 20) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/walking/community?page=${page}&limit=${limit}`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  getUserWalks: async (userId: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/walking/user?userId=${userId}`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  likeWalk: async (id: string, userId: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/walking/${id}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  commentWalk: async (id: string, userId: string, text: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/walking/${id}/comment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, text }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  getWalkComments: async (id: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/walking/${id}/comments`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  updateWalk: async (id: string, data: Partial<Walking>) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/walking/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+    // Social interactions
+    likeJourney: async (journeyId: string, userId: string) => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/journeys/${journeyId}/like`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message);
+        return result;
+      } catch (error) {
+        throw error;
+      }
+    },
+
+    getComments: async (journeyId: string) => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/journeys/${journeyId}/comments`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message);
+        return result;
+      } catch (error) {
+        throw error;
+      }
+    },
+
+    addComment: async (journeyId: string, userId: string, text: string) => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/journeys/${journeyId}/comments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, text }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message);
+        return result;
+      } catch (error) {
+        throw error;
+      }
+    },
+
+    // Update/Complete journey (for sharing)
+    completeJourney: async (id: string, data: { isPublic?: boolean; notes?: string }) => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/journeys/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message);
+        return result.journey;
+      } catch (error) {
+        throw error;
+      }
+    },
+
+    createJourney: async (data: any) => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/journeys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message);
+        return result.journey;
+      } catch (error) {
+        throw error;
+      }
+    },
+
   // Event APIs
   getFeaturedEvents: async (): Promise<EventsResponse> => {
     const controller = new AbortController();

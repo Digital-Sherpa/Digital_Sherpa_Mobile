@@ -14,7 +14,7 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async () => {
-    router.replace('/(tabs)');
+    
     if (!email || !password) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
