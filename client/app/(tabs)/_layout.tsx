@@ -95,7 +95,7 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   iconContainer: {
-    marginTop: 45,
+    marginTop: 35,
     width: 53,
     height: 53,
     borderRadius: 24,

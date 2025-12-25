@@ -51,9 +51,9 @@ export default function SplashPage() {
   }, []);
 
   return (
-    <View className="flex-1 bg-[#FED102] justify-center items-center">
+    <View className="flex-1 bg-white justify-center items-center">
       <Image
-        source={require('@/assets/images/landing-image.png')}
+        source={require('@/assets/images/DigitalSherpaLogo.png')}
         style={{ width: 300, height: 300 }}
         contentFit="contain"
       />

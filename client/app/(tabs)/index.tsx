@@ -1,21 +1,201 @@
-import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Modal, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { router } from 'expo-router';
+import { api, SuggestedRoute, Event } from '@/services/api';
+import { useAuth } from '@/context/AuthContext';
 
 export default function HomeScreen() {
-  const categories = ['Casual Walk', 'Heritage Sites', 'Traditional Craft'];
+  const { user } = useAuth();
+  const categories = ['Wood Carving', 'Pottery', 'Heritage', 'Cultural'];
   
-  const suggestedRoutes = [
-    { id: 1, title: 'Temple Visit', duration: 'for 30 minutes', image: require('@/assets/images/templevisit.png') },
-    { id: 2, title: '10,000 steps challenge', duration: 'for 30 minutes', image: require('@/assets/images/10000 steps.png') },
+  const [suggestedRoutes, setSuggestedRoutes] = useState<SuggestedRoute[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [selectedRoute, setSelectedRoute] = useState<SuggestedRoute | null>(null);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  
+  // Featured event state
+  const [featuredEvent, setFeaturedEvent] = useState<Event | null>(null);
+  const [eventLoading, setEventLoading] = useState(true);
+
+  // Fallback images for routes without cover images
+  const fallbackImages = [
+    require('@/assets/images/templevisit.png'),
+    require('@/assets/images/10000 steps.png'),
   ];
 
-  const featuredEventImage = require('@/assets/images/biska jatra.png');
+  const fetchSuggestedRoutes = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      await api.seedAll(); // Seed data if needed
+      const response = await api.getSuggestedRoutes();
+      setSuggestedRoutes(response.suggested);
+    } catch (error) {
+      console.error('Failed to fetch suggested routes:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Fetch featured event from backend
+  const fetchFeaturedEvent = useCallback(async () => {
+    try {
+      setEventLoading(true);
+      const response = await api.getFeaturedEvents();
+      if (response.success && response.events.length > 0) {
+        setFeaturedEvent(response.events[0]);
+      }
+    } catch (error) {
+      console.error('Failed to fetch featured event:', error);
+    } finally {
+      setEventLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSuggestedRoutes();
+    fetchFeaturedEvent();
+  }, [fetchSuggestedRoutes, fetchFeaturedEvent]);
+
+  // Navigate to explore page with route details
+  const handleNavigateToExplore = (route: SuggestedRoute) => {
+    router.push({
+      pathname: '/(tabs)/explore',
+      params: { 
+        type: route.type,
+        id: route._id,
+        slug: route.slug,
+      },
+    });
+  };
+
+  // Show detail modal when image is clicked
+  const handleShowDetails = (route: SuggestedRoute) => {
+    setSelectedRoute(route);
+    setShowDetailModal(true);
+  };
+
+  // Filter only roadmaps
+  const roadmapRoutes = suggestedRoutes.filter(route => route.type === 'roadmap');
+
+  // Close the detail modal
+  const handleCloseModal = () => {
+    setShowDetailModal(false);
+    setSelectedRoute(null);
+  };
 
   return (
     <View style={styles.container}>
+      {/* Route Detail Modal */}
+      <Modal
+        visible={showDetailModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={handleCloseModal}
+      >
+        <Pressable style={styles.modalOverlay} onPress={handleCloseModal}>
+          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            {selectedRoute && (
+              <>
+                <View style={styles.modalHeader}>
+                  <TouchableOpacity onPress={handleCloseModal} style={styles.modalCloseButton}>
+                    <Ionicons name="close" size={24} color="#333" />
+                  </TouchableOpacity>
+                </View>
+                
+                <Image
+                  source={
+                    selectedRoute.coverImage 
+                      ? { uri: selectedRoute.coverImage } 
+                      : fallbackImages[0]
+                  }
+                  style={styles.modalImage}
+                  contentFit="cover"
+                />
+                
+                <View style={styles.modalBody}>
+                  <View style={styles.modalTags}>
+                    <Text style={styles.modalTag}>🗺️ ROADMAP</Text>
+                    {selectedRoute.difficulty && (
+                      <Text style={[styles.modalTag, styles.modalDifficultyTag]}>
+                        {selectedRoute.difficulty.toUpperCase()}
+                      </Text>
+                    )}
+                  </View>
+                  
+                  <Text style={styles.modalTitle}>{selectedRoute.name}</Text>
+                  
+                  {selectedRoute.description && (
+                    <Text style={styles.modalDescription}>{selectedRoute.description}</Text>
+                  )}
+                  
+                  <View style={styles.modalMeta}>
+                    {selectedRoute.duration && (
+                      <View style={styles.modalMetaItem}>
+                        <Ionicons name="time-outline" size={18} color="#666" />
+                        <Text style={styles.modalMetaText}>{selectedRoute.duration}</Text>
+                      </View>
+                    )}
+                    {selectedRoute.distance && (
+                      <View style={styles.modalMetaItem}>
+                        <Ionicons name="walk-outline" size={18} color="#666" />
+                        <Text style={styles.modalMetaText}>{selectedRoute.distance}</Text>
+                      </View>
+                    )}
+                    {selectedRoute.stops && selectedRoute.stops.length > 0 && (
+                      <View style={styles.modalMetaItem}>
+                        <Ionicons name="location-outline" size={18} color="#666" />
+                        <Text style={styles.modalMetaText}>{selectedRoute.stops.length} stops</Text>
+                      </View>
+                    )}
+                  </View>
+                  
+                  {/* Stops List */}
+                  {selectedRoute.stops && selectedRoute.stops.length > 0 && (
+                    <View style={styles.modalStops}>
+                      <Text style={styles.modalStopsTitle}>Roadmap Stops:</Text>
+                      {selectedRoute.stops.map((stop, index) => (
+                        <View key={index} style={styles.modalStopItem}>
+                          <View style={styles.modalStopNumber}>
+                            <Text style={styles.modalStopNumberText}>{stop.order}</Text>
+                          </View>
+                          <View style={styles.modalStopInfo}>
+                            <Text style={styles.modalStopName}>
+                              {stop.place?.name || stop.placeSlug}
+                            </Text>
+                            {stop.duration && (
+                              <Text style={styles.modalStopDuration}>{stop.duration}</Text>
+                            )}
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  
+                  <TouchableOpacity 
+                    style={styles.modalNavigateButton}
+                    onPress={() => {
+                      handleCloseModal();
+                      handleNavigateToExplore(selectedRoute);
+                    }}
+                  >
+                    <LinearGradient
+                      colors={['#25E88A', '#1BC47A']}
+                      style={styles.modalNavigateGradient}
+                    >
+                      <Ionicons name="navigate" size={20} color="#fff" />
+                      <Text style={styles.modalNavigateText}>Start Navigation</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
       {/* Background SVG */}
       <Image
         source={require('@/assets/images/Hello World.svg')}
@@ -30,7 +210,7 @@ export default function HomeScreen() {
           <View style={styles.header}>
             <View style={styles.profileCircle} />
             <View style={styles.headerContent}>
-              <Text style={styles.greeting}>Namaste, John</Text>
+              <Text style={styles.greeting}>Namaste, {user?.name || 'Guest'}</Text>
               <Text style={styles.subtitle}>Welcome to Digital Sherpa</Text>
             </View>
             <View style={styles.headerIcons}>
@@ -78,51 +258,104 @@ export default function HomeScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Featured Event:</Text>
             <View style={styles.featuredCard}>
-              <Image
-                source={featuredEventImage}
-                style={styles.featuredImage}
-                contentFit="cover"
-              />
-              <LinearGradient
-                colors={['transparent', 'rgba(0,0,0,0.8)']}
-                style={styles.featuredGradient}
-              >
-                <Text style={styles.featuredTitle}>Biska Jatra Day 1</Text>
-                <Text style={styles.featuredDescription}>
-                  Bhaktapur&apos;s vibrant nine-day festival celebrating the Nepali New Year with iconic chariot processions.
-                </Text>
-              </LinearGradient>
+              {eventLoading ? (
+                <View style={styles.featuredLoading}>
+                  <ActivityIndicator size="small" color="#E45C12" />
+                </View>
+              ) : featuredEvent ? (
+                <>
+                  <Image
+                    source={{ uri: featuredEvent.imageUrl }}
+                    style={styles.featuredImage}
+                    contentFit="cover"
+                  />
+                  <LinearGradient
+                    colors={['transparent', featuredEvent.color || 'rgba(0,0,0,0.8)']}
+                    style={styles.featuredGradient}
+                  >
+                    <View style={styles.featuredHeader}>
+                      <Text style={styles.featuredIcon}>{featuredEvent.icon}</Text>
+                      <Text style={styles.featuredCategory}>{featuredEvent.category?.toUpperCase()}</Text>
+                    </View>
+                    <Text style={styles.featuredTitle}>{featuredEvent.name}</Text>
+                    {featuredEvent.description ? (
+                      <Text style={styles.featuredDescription}>{featuredEvent.description}</Text>
+                    ) : null}
+                    {featuredEvent.locations && featuredEvent.locations.length > 0 && (
+                      <Text style={styles.featuredLocation}>
+                        📍 {featuredEvent.locations[0].name}, {featuredEvent.locations[0].address}
+                      </Text>
+                    )}
+                    {featuredEvent.startDate && (
+                      <Text style={styles.featuredDate}>
+                        📅 {new Date(featuredEvent.startDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                      </Text>
+                    )}
+                  </LinearGradient>
+                </>
+              ) : (
+                <View style={styles.featuredLoading}>
+                  <Text style={styles.noEventText}>No featured event</Text>
+                </View>
+              )}
             </View>
           </View>
 
-          {/* Suggested Routes */}
+          {/* Suggested Roadmaps */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Suggested Routes:</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.routesScroll}>
-              {suggestedRoutes.map((route) => (
-                <View key={route.id} style={styles.routeCard}>
-                  <Image
-                    source={route.image}
-                    style={styles.routeImage}
-                    contentFit="cover"
-                  />
-                  <View style={styles.routeOverlay}>
-                    <Text style={styles.popularTag}>POPULAR</Text>
-                    <View style={styles.routeInfo}>
-                      <Text style={styles.routeTitle}>{route.title}</Text>
-                      <Text style={styles.routeDuration}>{route.duration}</Text>
-                    </View>
+            <Text style={styles.sectionTitle}>Suggested Roadmaps:</Text>
+            {isLoading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="small" color="#E45C12" />
+              </View>
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.routesScroll}>
+                {roadmapRoutes.map((route, index) => (
+                  <View key={route._id} style={styles.routeCard}>
+                    {/* Image area - clickable for details */}
+                    <TouchableOpacity 
+                      style={styles.routeImageTouchable}
+                      onPress={() => handleShowDetails(route)}
+                      activeOpacity={0.9}
+                    >
+                      <Image
+                        source={
+                          route.coverImage 
+                            ? { uri: route.coverImage } 
+                            : fallbackImages[index % fallbackImages.length]
+                        }
+                        style={styles.routeImage}
+                        contentFit="cover"
+                      />
+                      <View style={styles.routeOverlay}>
+                        <View style={styles.routeTagsRow}>
+                          <Text style={styles.popularTag}>ROADMAP</Text>
+                          {route.difficulty && (
+                            <Text style={styles.difficultyTag}>{route.difficulty.toUpperCase()}</Text>
+                          )}
+                        </View>
+                        <View style={styles.routeInfo}>
+                          <Text style={styles.routeTitle}>{route.name}</Text>
+                          <Text style={styles.routeDuration}>
+                            {route.duration ? route.duration : route.category}
+                          </Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={styles.routeButton}
+                      onPress={() => handleNavigateToExplore(route)}
+                    >
+                      <Ionicons name="navigate" size={20} color="#fff" />
+                    </TouchableOpacity>
                   </View>
-                  <TouchableOpacity style={styles.routeButton}>
-                    <Ionicons name="paper-plane" size={20} color="#000" />
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </ScrollView>
+                ))}
+              </ScrollView>
+            )}
           </View>
 
           {/* Bottom spacing for tab bar */}
-          <View style={{ height: 120 }} />
+          <View style={{ height: 110 }} />
         </ScrollView>
       </SafeAreaView>
     </View>
@@ -286,21 +519,65 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     marginTop: 4,
   },
+  featuredLoading: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#E8E8E8',
+  },
+  featuredHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  featuredIcon: {
+    fontSize: 16,
+  },
+  featuredCategory: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  featuredLocation: {
+    fontSize: 10,
+    fontWeight: '400',
+    color: '#FFFFFF',
+    marginTop: 2,
+  },
+  featuredDate: {
+    fontSize: 10,
+    fontWeight: '400',
+    color: '#FFFFFF',
+    marginTop: 2,
+  },
+  noEventText: {
+    fontSize: 14,
+    color: '#666',
+  },
   routesScroll: {
     flexDirection: 'row',
   },
   routeCard: {
-    width: 184,
+    width: 172,
     height: 256,
-    borderRadius: 16,
-    borderBottomLeftRadius: 88,
     overflow: 'hidden',
+    borderTopLeftRadius: 16, 
+    borderTopRightRadius: 16,
+    borderBottomRightRadius: 16,
+    borderBottomLeftRadius: 88,
     marginRight: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 6,
+    
   },
   routeImage: {
     width: '100%',
@@ -308,15 +585,36 @@ const styles = StyleSheet.create({
     position: 'absolute',
     
   },
+  routeImageTouchable: {
+    flex: 1,
+  },
   routeOverlay: {
     flex: 1,
     padding: 16,
   },
+  routeTagsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
   popularTag: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#000',
-    opacity: 0.5,
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  difficultyTag: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#fff',
+    backgroundColor: '#E45C12',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    overflow: 'hidden',
   },
   routeInfo: {
     position: 'absolute',
@@ -328,23 +626,198 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   routeDuration: {
     fontSize: 12,
     fontWeight: '500',
     color: '#FFFFFF',
     marginTop: 2,
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   routeButton: {
     position: 'absolute',
     bottom: 0,
     left: 0,
+    zIndex: 1000,
     width: 56,
     height: 56,
-    backgroundColor: '#25E88A',
     borderTopRightRadius: 16,
     borderBottomLeftRadius: 56,
+    borderTopLeftRadius: 56,
+    borderBottomRightRadius: 56,
+    backgroundColor: '#25E88A',
     justifyContent: 'center',
     alignItems: 'center',
   },
+
+
+  loadingContainer: {
+    height: 100,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '85%',
+  },
+  modalHeader: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 10,
+  },
+  modalCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  modalImage: {
+    width: '100%',
+    height: 200,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+  },
+  modalBody: {
+    padding: 20,
+  },
+  modalTags: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  modalTag: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+    backgroundColor: '#F5F5F5',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  modalDifficultyTag: {
+    backgroundColor: '#FDF0E0',
+    color: '#E45C12',
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#000',
+    marginBottom: 8,
+  },
+  modalDescription: {
+    fontSize: 14,
+    color: '#666',
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  modalMeta: {
+    flexDirection: 'row',
+    gap: 20,
+    marginBottom: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8E8E8',
+  },
+  modalMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  modalMetaText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  modalStops: {
+    marginBottom: 20,
+  },
+  modalStopsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000',
+    marginBottom: 12,
+  },
+  modalStopItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  modalStopNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#E45C12',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  modalStopNumberText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  modalStopInfo: {
+    flex: 1,
+  },
+  modalStopName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333',
+  },
+  modalStopDuration: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 2,
+  },
+  modalNavigateButton: {
+    borderRadius: 9999,
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  modalNavigateGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+  },
+  modalNavigateText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
+  },
 });
+
+/* Rectangle */
+
+// position: absolute;
+// width: 184px;
+// height: 256px;
+// left: 0px;
+// top: 0px;
+
+// background: url(image.png);
+// box-shadow: inset 0px -80px 10px rgba(0, 0, 0, 0.25);
+// border-radius: 16px 16px 16px 88px;
