@@ -12,6 +12,7 @@ export default function HomeScreen() {
   const { user } = useAuth();
   const categories = ['All', 'Wood Carving', 'Pottery', 'Heritage', 'Cultural'];
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
   
   const [suggestedRoutes, setSuggestedRoutes] = useState<SuggestedRoute[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -21,6 +22,13 @@ export default function HomeScreen() {
   // Featured events state (now array for multiple events)
   const [featuredEvents, setFeaturedEvents] = useState<Event[]>([]);
   const [eventLoading, setEventLoading] = useState(true);
+
+  // AI Search state
+  const [searchMode, setSearchMode] = useState<'normal' | 'ai'>('normal');
+  const [showSearchModeModal, setShowSearchModeModal] = useState(false);
+  const [aiSearchResults, setAiSearchResults] = useState<SuggestedRoute[]>([]);
+  const [isAiSearching, setIsAiSearching] = useState(false);
+  const [aiSearchTimeout, setAiSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
 
   // Fallback images for routes without cover images
   const fallbackImages = [
@@ -56,10 +64,57 @@ export default function HomeScreen() {
     }
   }, []);
 
+  // AI Search handler with debounce
+  const handleAiSearch = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setAiSearchResults([]);
+      return;
+    }
+    
+    try {
+      setIsAiSearching(true);
+      const response = await api.aiSearch(query);
+      if (response.success && response.suggested) {
+        setAiSearchResults(response.suggested);
+      }
+    } catch (error) {
+      console.error('AI search failed:', error);
+      setAiSearchResults([]);
+    } finally {
+      setIsAiSearching(false);
+    }
+  }, []);
+
+  // Handle search query change with debounce for AI mode
+  const handleSearchChange = useCallback((text: string) => {
+    setSearchQuery(text);
+    
+    if (searchMode === 'ai') {
+      // Clear previous timeout
+      if (aiSearchTimeout) {
+        clearTimeout(aiSearchTimeout);
+      }
+      // Set new debounced search
+      const timeout = setTimeout(() => {
+        handleAiSearch(text);
+      }, 500);
+      setAiSearchTimeout(timeout);
+    }
+  }, [searchMode, aiSearchTimeout, handleAiSearch]);
+
   useEffect(() => {
     fetchSuggestedRoutes();
     fetchFeaturedEvents();
   }, [fetchSuggestedRoutes, fetchFeaturedEvents]);
+
+  // Clear AI results when switching to normal mode
+  useEffect(() => {
+    if (searchMode === 'normal') {
+      setAiSearchResults([]);
+    } else if (searchMode === 'ai' && searchQuery.trim()) {
+      handleAiSearch(searchQuery);
+    }
+  }, [searchMode]);
 
   // Navigate to explore page with route details
   const handleNavigateToExplore = (route: SuggestedRoute) => {
@@ -79,12 +134,27 @@ export default function HomeScreen() {
     setShowDetailModal(true);
   };
 
-  // Filter only roadmaps and by selected category
-  const roadmapRoutes = suggestedRoutes.filter(route => {
-    if (route.type !== 'roadmap') return false;
-    if (selectedCategory === 'All') return true;
-    return route.category?.toLowerCase() === selectedCategory.toLowerCase();
-  });
+  // Filter roadmaps by category and search query (for normal mode)
+  const roadmapRoutes = searchMode === 'ai' 
+    ? aiSearchResults 
+    : suggestedRoutes.filter(route => {
+        if (route.type !== 'roadmap') return false;
+        
+        // Category filter
+        const matchesCategory = selectedCategory === 'All' || 
+          route.category?.toLowerCase() === selectedCategory.toLowerCase();
+        
+        // Search filter - search in title, duration, category, difficulty, description
+        const query = searchQuery.toLowerCase().trim();
+        const matchesSearch = !query || 
+          route.name?.toLowerCase().includes(query) ||
+          route.duration?.toLowerCase().includes(query) ||
+          route.category?.toLowerCase().includes(query) ||
+          route.difficulty?.toLowerCase().includes(query) ||
+          route.description?.toLowerCase().includes(query);
+        
+        return matchesCategory && matchesSearch;
+      });
 
   // Close the detail modal
   const handleCloseModal = () => {
@@ -229,22 +299,107 @@ export default function HomeScreen() {
             </View>
           </View>
 
+          {/* Search Mode Selection Modal */}
+          <Modal
+            visible={showSearchModeModal}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={() => setShowSearchModeModal(false)}
+          >
+            <Pressable 
+              style={styles.searchModeModalOverlay} 
+              onPress={() => setShowSearchModeModal(false)}
+            >
+              <View style={styles.searchModeModalContent}>
+                <Text style={styles.searchModeModalTitle}>Search Mode</Text>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.searchModeOption,
+                    searchMode === 'ai' && styles.searchModeOptionActive
+                  ]}
+                  onPress={() => {
+                    setSearchMode('ai');
+                    setShowSearchModeModal(false);
+                  }}
+                >
+                  <View style={styles.searchModeOptionIcon}>
+                    <Ionicons name="sparkles" size={24} color={searchMode === 'ai' ? '#fff' : '#E45C12'} />
+                  </View>
+                  <View style={styles.searchModeOptionText}>
+                    <Text style={[
+                      styles.searchModeOptionTitle,
+                      searchMode === 'ai' && styles.searchModeOptionTitleActive
+                    ]}>AI Search</Text>
+                    <Text style={styles.searchModeOptionDesc}>Natural language powered by Gemini</Text>
+                  </View>
+                  {searchMode === 'ai' && (
+                    <Ionicons name="checkmark-circle" size={24} color="#fff" />
+                  )}
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.searchModeOption,
+                    searchMode === 'normal' && styles.searchModeOptionActive
+                  ]}
+                  onPress={() => {
+                    setSearchMode('normal');
+                    setShowSearchModeModal(false);
+                  }}
+                >
+                  <View style={styles.searchModeOptionIcon}>
+                    <Ionicons name="search" size={24} color={searchMode === 'normal' ? '#fff' : '#E45C12'} />
+                  </View>
+                  <View style={styles.searchModeOptionText}>
+                    <Text style={[
+                      styles.searchModeOptionTitle,
+                      searchMode === 'normal' && styles.searchModeOptionTitleActive
+                    ]}>Normal Search</Text>
+                    <Text style={styles.searchModeOptionDesc}>Filter by keywords and categories</Text>
+                  </View>
+                  {searchMode === 'normal' && (
+                    <Ionicons name="checkmark-circle" size={24} color="#fff" />
+                  )}
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Modal>
+
           {/* Search Bar */}
           <View style={styles.searchContainer}>
             <View style={styles.searchBar}>
-              <Ionicons name="search-outline" size={22} color="#000" style={styles.searchIcon} />
+              {searchMode === 'ai' ? (
+                <Ionicons name="sparkles" size={22} color="#E45C12" style={styles.searchIcon} />
+              ) : (
+                <Ionicons name="search-outline" size={22} color="#000" style={styles.searchIcon} />
+              )}
               <TextInput
-                placeholder="Search"
+                placeholder={searchMode === 'ai' ? "Ask AI: e.g., 'easy heritage tours'" : "Search roadmaps..."}
                 placeholderTextColor="rgba(33, 37, 41, 0.46)"
                 style={styles.searchInput}
+                value={searchQuery}
+                onChangeText={handleSearchChange}
               />
-              <LinearGradient
-                colors={['#FDAA2E', '#EE5C19']}
-                style={styles.filterButton}
-              >
-                <Ionicons name="options" size={18} color="#fff" />
-              </LinearGradient>
+              {isAiSearching && (
+                <ActivityIndicator size="small" color="#E45C12" style={{ marginRight: 8 }} />
+              )}
+              <TouchableOpacity onPress={() => setShowSearchModeModal(true)}>
+                <LinearGradient
+                  colors={searchMode === 'ai' ? ['#8B5CF6', '#6366F1'] : ['#FDAA2E', '#EE5C19']}
+                  style={styles.filterButton}
+                >
+                  {searchMode === 'ai' ? (
+                    <Ionicons name="sparkles" size={18} color="#fff" />
+                  ) : (
+                    <Ionicons name="options" size={18} color="#fff" />
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
             </View>
+            {searchMode === 'ai' && (
+              <Text style={styles.aiModeIndicator}>✨ AI Mode Active - Ask anything!</Text>
+            )}
           </View>
 
           {/* Categories Section */}
@@ -385,6 +540,132 @@ export default function HomeScreen() {
                 ))}
               </ScrollView>
             )}
+            
+
+            <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Coupons</Text>
+            
+            {/* Horizontal Scrolling Coupons */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {/* Coupon 1 */}
+              <TouchableOpacity 
+                style={styles.couponCard}
+                activeOpacity={0.9}
+                onPress={() => console.log('Coupon 1 tapped')}
+              >
+                <LinearGradient
+                  colors={['#FF7F5C', '#FF6B47']}
+                  style={styles.couponStub}
+                >
+                  <View style={styles.couponStubBorder}>
+                    <Text style={styles.couponStubText}>COUPON</Text>
+                  </View>
+                </LinearGradient>
+                
+                <View style={styles.couponMain}>
+                  <View style={styles.couponHeader}>
+                    <Text style={styles.couponAmount}>$50.00</Text>
+                    <View style={styles.couponLogo}>
+                      <View style={styles.couponLogoIcon} />
+                      <Text style={styles.couponLogoText}>Sherpa</Text>
+                    </View>
+                  </View>
+                  <View style={styles.couponDivider} />
+                  <Text style={styles.couponDescription}>
+                    Redeem at any Digital Sherpa partner location during your tour.
+                  </Text>
+                  <View style={styles.couponFooter}>
+                    <View style={styles.couponValidity}>
+                      <Text style={styles.couponValidityText}>Valid through Jan 15, 2025</Text>
+                    </View>
+                    <View style={styles.couponCodeSection}>
+                      <Text style={styles.couponCodeLabel}>Coupon Code</Text>
+                      <Text style={styles.couponCode}>SHERPA50</Text>
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.couponRightEdge} />
+              </TouchableOpacity>
+
+              {/* Coupon 2 */}
+              <TouchableOpacity 
+                style={styles.couponCard}
+                activeOpacity={0.9}
+                onPress={() => console.log('Coupon 2 tapped')}
+              >
+                <LinearGradient
+                  colors={['#FF7F5C', '#FF6B47']}
+                  style={styles.couponStub}
+                >
+                  <View style={styles.couponStubBorder}>
+                    <Text style={styles.couponStubText}>COUPON</Text>
+                  </View>
+                </LinearGradient>
+                
+                <View style={styles.couponMain}>
+                  <View style={styles.couponHeader}>
+                    <Text style={styles.couponAmount}>20% OFF</Text>
+                    <View style={styles.couponLogo}>
+                      <View style={styles.couponLogoIcon} />
+                      <Text style={styles.couponLogoText}>Café</Text>
+                    </View>
+                  </View>
+                  <View style={styles.couponDivider} />
+                  <Text style={styles.couponDescription}>
+                    Get 20% off at Heritage Café, Patan Durbar Square.
+                  </Text>
+                  <View style={styles.couponFooter}>
+                    <View style={styles.couponValidity}>
+                      <Text style={styles.couponValidityText}>Valid through Feb 28, 2025</Text>
+                    </View>
+                    <View style={styles.couponCodeSection}>
+                      <Text style={styles.couponCodeLabel}>Coupon Code</Text>
+                      <Text style={styles.couponCode}>CAFE20</Text>
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.couponRightEdge} />
+              </TouchableOpacity>
+
+              {/* Coupon 3 */}
+              <TouchableOpacity 
+                style={styles.couponCard}
+                activeOpacity={0.9}
+                onPress={() => console.log('Coupon 3 tapped')}
+              >
+                <LinearGradient
+                  colors={['#FF7F5C', '#FF6B47']}
+                  style={styles.couponStub}
+                >
+                  <View style={styles.couponStubBorder}>
+                    <Text style={styles.couponStubText}>COUPON</Text>
+                  </View>
+                </LinearGradient>
+                
+                <View style={styles.couponMain}>
+                  <View style={styles.couponHeader}>
+                    <Text style={styles.couponAmount}>FREE</Text>
+                    <View style={styles.couponLogo}>
+                      <View style={styles.couponLogoIcon} />
+                      <Text style={styles.couponLogoText}>Workshop</Text>
+                    </View>
+                  </View>
+                  <View style={styles.couponDivider} />
+                  <Text style={styles.couponDescription}>
+                    Free pottery workshop at Bhaktapur Pottery Square.
+                  </Text>
+                  <View style={styles.couponFooter}>
+                    <View style={styles.couponValidity}>
+                      <Text style={styles.couponValidityText}>Valid through Mar 15, 2025</Text>
+                    </View>
+                    <View style={styles.couponCodeSection}>
+                      <Text style={styles.couponCodeLabel}>Coupon Code</Text>
+                      <Text style={styles.couponCode}>POTTERY1</Text>
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.couponRightEdge} />
+              </TouchableOpacity>
+            </ScrollView>
           </View>
 
           {/* Bottom spacing for tab bar */}
@@ -853,5 +1134,190 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
+  },
+  // Coupon Ticket Styles
+  couponCard: {
+    marginTop: 24,
+    flexDirection: 'row',
+    borderRadius: 10,
+    overflow: 'hidden',
+    height: 180,
+    width: 300,
+    marginRight: 12,
+    backgroundColor: '#FFF8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 30,
+    elevation: 10,
+  },
+  couponStub: {
+    width: 90,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 12,
+  },
+  couponStubBorder: {
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderStyle: 'dashed',
+    borderRadius: 8,
+    paddingVertical: 24,
+    paddingHorizontal: 10,
+  },
+  couponStubText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 3,
+    transform: [{ rotate: '-90deg' }],
+    width: 80,
+    textAlign: 'center',
+  },
+  couponMain: {
+    flex: 1,
+    padding: 16,
+    paddingRight: 24,
+    justifyContent: 'space-between',
+  },
+  couponHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  couponAmount: {
+    fontSize: 40,
+    fontWeight: '700',
+    color: '#FF6B47',
+    lineHeight: 44,
+  },
+  couponLogo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  couponLogoIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#FF6B47',
+  },
+  couponLogoText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FF6B47',
+  },
+  couponDivider: {
+    borderTopWidth: 2,
+    borderStyle: 'dotted',
+    borderColor: '#ddd',
+    marginVertical: 8,
+  },
+  couponDescription: {
+    fontSize: 10,
+    color: '#999',
+    lineHeight: 14,
+    textAlign: 'center',
+  },
+  couponFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  couponValidity: {
+    backgroundColor: '#FF6B47',
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 4,
+  },
+  couponValidityText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  couponCodeSection: {
+    alignItems: 'flex-end',
+  },
+  couponCodeLabel: {
+    fontSize: 8,
+    color: '#999',
+    textTransform: 'uppercase',
+  },
+  couponCode: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FF6B47',
+    letterSpacing: 2,
+  },
+  couponRightEdge: {
+    width: 16,
+    backgroundColor: '#FFF8F0',
+    borderLeftWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: '#ddd',
+  },
+  // AI Search Mode Modal Styles
+  searchModeModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchModeModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    width: '85%',
+    maxWidth: 350,
+  },
+  searchModeModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  searchModeOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#F5F5F5',
+    marginBottom: 12,
+  },
+  searchModeOptionActive: {
+    backgroundColor: '#E45C12',
+  },
+  searchModeOptionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FDF0E0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  searchModeOptionText: {
+    flex: 1,
+  },
+  searchModeOptionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  searchModeOptionTitleActive: {
+    color: '#fff',
+  },
+  searchModeOptionDesc: {
+    fontSize: 12,
+    color: '#888',
+    marginTop: 2,
+  },
+  aiModeIndicator: {
+    fontSize: 12,
+    color: '#8B5CF6',
+    marginTop: 8,
+    textAlign: 'center',
+    fontWeight: '500',
   },
 });

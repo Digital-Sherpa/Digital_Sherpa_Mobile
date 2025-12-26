@@ -132,12 +132,8 @@ const CommunityWalkCard = ({ walk, currentUserId, onLike, onComment, onAction, o
   return (
     <View style={styles.communityCard}>
       <View style={styles.communityHeader}>
-        <View style={styles.userAvatar}>
-          {user.avatar ? (
-            <Image source={{ uri: user.avatar }} style={styles.avatarImage} />
-          ) : (
-            <Ionicons name="person" size={20} color="#fff" />
-          )}
+        <View style={[styles.userAvatar, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#D9D9D9' }]}>
+            <Ionicons name="person" size={20} color="#FFF" />
         </View>
         <View style={styles.userInfo}>
           <Text style={styles.userName}>{user.name}</Text>
@@ -506,12 +502,8 @@ export default function SocialScreen() {
                 ) : (
                   comments.map((comment) => (
                     <View key={comment._id || Math.random()} style={styles.commentItem}>
-                      <View style={styles.commentAvatar}>
-                        {comment.userId && comment.userId.avatar ? (
-                             <Image source={{ uri: comment.userId.avatar }} style={styles.commentAvatarImage} />
-                        ) : (
-                             <Ionicons name="person" size={16} color="#fff" />
-                        )}
+                      <View style={[styles.commentAvatar, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#D9D9D9' }]}>
+                             <Ionicons name="person" size={16} color="#FFF" />
                       </View>
                       <View style={styles.commentContent}>
                         <Text style={styles.commentUser}>{comment.userId?.name || 'User'}</Text>

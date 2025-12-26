@@ -14,6 +14,7 @@ import {
   Modal,
   TextInput,
   Image,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
@@ -718,7 +719,7 @@ export default function ExploreScreen() {
     return {
       distance, // meters
       steps: Math.floor(distance * 1.31), // approx steps
-      calories: Math.floor(distance * 0.04), // approx calories
+      calories: Math.floor(distance * 0.05), // ~50 calories per km walked
       avgSpeed: walkTimer > 0 ? (distance / walkTimer) * 3.6 : 0 // km/h
     };
   }, [walkLocations, walkTimer]);
@@ -1651,6 +1652,7 @@ export default function ExploreScreen() {
               >
                 <Ionicons name="stop" size={20} color="#fff" />
                 <Text style={styles.stopRecordingText}>Stop</Text>
+                
               </TouchableOpacity>
             </View>
           )}
@@ -2025,95 +2027,104 @@ export default function ExploreScreen() {
 
       {/* Save Walk Modal */}
       <Modal visible={showSaveModal} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-            <View style={styles.saveModalCard}>
-                
-                {/* Header Image */}
-                <View style={styles.modalHeaderImageContainer}>
-                  {capturedImage ? (
-                      <Image source={{ uri: capturedImage }} style={styles.headerImage} resizeMode="cover" />
-                  ) : (
-                      <View style={[styles.headerImage, { backgroundColor: '#eee', alignItems: 'center', justifyContent: 'center' }]}>
-                        <Ionicons name="map" size={48} color="#ccc" />
-                      </View>
-                  )}
-                  <LinearGradient
-                    colors={['transparent', 'rgba(0,0,0,0.7)']}
-                    style={styles.headerGradient}
-                  />
-                  <Text style={styles.headerTitleOverlay}>Journey Complete!</Text>
-                </View>
-
-                <View style={styles.saveFormContent}>
-                    {/* Stats Row */}
-                    <View style={styles.statsBadgeRow}>
-                        <View style={styles.statsBadge}>
-                            <Ionicons name="time" size={16} color="#E45C12" />
-                            <View>
-                                <Text style={styles.badgeLabel}>DURATION</Text>
-                                <Text style={styles.badgeValue}>{new Date(walkTimer * 1000).toISOString().substr(11, 8)}</Text>
-                            </View>
-                        </View>
-                        <View style={styles.separator} />
-                        <View style={styles.statsBadge}>
-                            <Ionicons name="walk" size={16} color="#E45C12" />
-                            <View>
-                                <Text style={styles.badgeLabel}>DISTANCE</Text>
-                                <Text style={styles.badgeValue}>{(walkStats.distance / 1000).toFixed(2)} km</Text>
-                            </View>
-                        </View>
+        <KeyboardAvoidingView 
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
+          <View style={styles.saveModalCard}>
+            <ScrollView 
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ flexGrow: 1 }}
+            >
+              {/* Header Image */}
+              <View style={styles.modalHeaderImageContainer}>
+                {capturedImage ? (
+                    <Image source={{ uri: capturedImage }} style={styles.headerImage} resizeMode="cover" />
+                ) : (
+                    <View style={[styles.headerImage, { backgroundColor: '#eee', alignItems: 'center', justifyContent: 'center' }]}>
+                      <Ionicons name="map" size={48} color="#ccc" />
                     </View>
+                )}
+                <LinearGradient
+                  colors={['transparent', 'rgba(0,0,0,0.7)']}
+                  style={styles.headerGradient}
+                />
+                <Text style={styles.headerTitleOverlay}>Journey Complete!</Text>
+              </View>
 
-                    <Text style={styles.inputLabel}>Title</Text>
-                    <TextInput 
-                        placeholder="Name your journey"
-                        style={styles.saveInput}
-                        value={saveTitle}
-                        onChangeText={setSaveTitle}
-                        placeholderTextColor="#999"
-                    />
+              <View style={styles.saveFormContent}>
+                  {/* Stats Row */}
+                  <View style={styles.statsBadgeRow}>
+                      <View style={styles.statsBadge}>
+                          <Ionicons name="time" size={16} color="#E45C12" />
+                          <View>
+                              <Text style={styles.badgeLabel}>DURATION</Text>
+                              <Text style={styles.badgeValue}>{new Date(walkTimer * 1000).toISOString().substr(11, 8)}</Text>
+                          </View>
+                      </View>
+                      <View style={styles.separator} />
+                      <View style={styles.statsBadge}>
+                          <Ionicons name="walk" size={16} color="#E45C12" />
+                          <View>
+                              <Text style={styles.badgeLabel}>DISTANCE</Text>
+                              <Text style={styles.badgeValue}>{(walkStats.distance / 1000).toFixed(2)} km</Text>
+                          </View>
+                      </View>
+                  </View>
 
-                    <Text style={styles.inputLabel}>Caption</Text>
-                    <TextInput 
-                        placeholder="Add a note about your walk..."
-                        style={[styles.saveInput, { height: 100, textAlignVertical: 'top' }]}
-                        multiline
-                        value={saveCaption}
-                        onChangeText={setSaveCaption}
-                        placeholderTextColor="#999"
-                    />
+                  <Text style={styles.inputLabel}>Title</Text>
+                  <TextInput 
+                      placeholder="Name your journey"
+                      style={styles.saveInput}
+                      value={saveTitle}
+                      onChangeText={setSaveTitle}
+                      placeholderTextColor="#999"
+                  />
 
-                    <TouchableOpacity 
-                        style={styles.saveButton}
-                        onPress={handleSaveWalk}
-                        disabled={isSavingWalk}
-                    >
-                        <LinearGradient
-                            colors={['#E45C12', '#D94A00']}
-                            style={styles.saveButtonGradient}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 0 }}
-                        >
-                            {isSavingWalk ? (
-                                <ActivityIndicator color="#fff" />
-                            ) : (
-                                <>
-                                    <Ionicons name="save-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
-                                    <Text style={styles.saveButtonText}>Save Journey</Text>
-                                </>
-                            )}
-                        </LinearGradient>
-                    </TouchableOpacity>
+                  <Text style={styles.inputLabel}>Caption</Text>
+                  <TextInput 
+                      placeholder="Add a note about your walk..."
+                      style={[styles.saveInput, { height: 80, textAlignVertical: 'top', paddingTop: 12 }]}
+                      multiline
+                      value={saveCaption}
+                      onChangeText={setSaveCaption}
+                      placeholderTextColor="#999"
+                  />
 
-                    <TouchableOpacity 
-                        style={styles.cancelButton}
-                        onPress={() => setShowSaveModal(false)}
-                    >
-                        <Text style={styles.cancelButtonText}>Discard Journey</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </View>
+                  <TouchableOpacity 
+                      style={styles.saveButton}
+                      onPress={handleSaveWalk}
+                      disabled={isSavingWalk}
+                  >
+                      <LinearGradient
+                          colors={['#E45C12', '#D94A00']}
+                          style={styles.saveButtonGradient}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                      >
+                          {isSavingWalk ? (
+                              <ActivityIndicator color="#fff" />
+                          ) : (
+                              <>
+                                  <Ionicons name="save-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+                                  <Text style={styles.saveButtonText}>Save Journey</Text>
+                              </>
+                          )}
+                      </LinearGradient>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity 
+                      style={styles.cancelButton}
+                      onPress={() => setShowSaveModal(false)}
+                  >
+                      <Text style={styles.cancelButtonText}>Discard Journey</Text>
+                  </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -2168,7 +2179,7 @@ const styles = StyleSheet.create({
     maxHeight: '85%',
   },
   modalHeaderImageContainer: {
-    height: 180,
+    height: 140,
     width: '100%',
     position: 'relative',
   },
@@ -2727,7 +2738,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FF3B30',
     paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingHorizontal: 15,
     borderRadius: 20,
     gap: 6,
   },

@@ -1054,6 +1054,36 @@ export const api = {
     }
   },
 
+  // AI Search using Gemini Flash
+  aiSearch: async (query: string): Promise<{ success: boolean; suggested: SuggestedRoute[]; events?: Event[]; aiProcessed?: boolean }> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for AI
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/search/ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error((result as ApiError).message || 'AI search failed');
+      }
+
+      return result;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('AI search timed out.');
+      }
+      throw error;
+    }
+  },
+
   // Seed all data
   seedAll: async (): Promise<{ success: boolean; message: string }> => {
     const controller = new AbortController();

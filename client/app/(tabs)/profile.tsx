@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
-import { View, Text, Image, StyleSheet, Dimensions, TouchableOpacity, ScrollView, Modal, TextInput, Alert, Pressable } from 'react-native';
+import { View, Text, Image, StyleSheet, Dimensions, TouchableOpacity, ScrollView, Modal, TextInput, Alert, Pressable, ActivityIndicator } from 'react-native';
 import { api } from '../../services/api';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
+import * as ImagePicker from 'expo-image-picker';
 
 const { width } = Dimensions.get('window');
 
@@ -12,6 +13,8 @@ const { width } = Dimensions.get('window');
 const ProfileScreen = () => {
   const { user } = useAuth();
   const [editModalVisible, setEditModalVisible] = useState(false);
+  const [profileImage, setProfileImage] = useState<string | null>(user?.avatar || null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [form, setForm] = useState({
     name: user?.name || '',
     email: user?.email || '',
@@ -53,6 +56,70 @@ const ProfileScreen = () => {
     { label: 'Followers', value: 456 },
   ];
 
+  // Pick image from gallery
+  const pickImage = async () => {
+    try {
+      // Request permission
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow access to your photo library to change your profile picture.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setProfileImage(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('Error', 'Failed to pick image');
+    }
+  };
+
+  // Take photo with camera
+  const takePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow access to your camera to take a profile picture.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setProfileImage(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error taking photo:', error);
+      Alert.alert('Error', 'Failed to take photo');
+    }
+  };
+
+  // Show image picker options
+  const showImageOptions = () => {
+    Alert.alert(
+      'Change Profile Picture',
+      'Choose an option',
+      [
+        { text: 'Take Photo', onPress: takePhoto },
+        { text: 'Choose from Gallery', onPress: pickImage },
+        { text: 'Remove Photo', onPress: () => setProfileImage(null), style: 'destructive' },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
   const handleEditPress = () => {
     setEditModalVisible(true);
   };
@@ -65,9 +132,13 @@ const ProfileScreen = () => {
     setIsSaving(true);
     try {
       // Prepare update payload (languages as array)
-      const payload = { ...form, languages: form.languages.split(',').map(l => l.trim()).filter(Boolean) };
+      const payload: any = { 
+        ...form, 
+        languages: form.languages.split(',').map(l => l.trim()).filter(Boolean),
+        avatar: profileImage,
+      };
       if (!payload.password) delete payload.password;
-      await api.updateUserProfile(payload); // You will add this API method
+      await api.updateUserProfile(payload);
       Alert.alert('Success', 'Profile updated!');
       setEditModalVisible(false);
     } catch (e: any) {
@@ -85,9 +156,18 @@ const ProfileScreen = () => {
           <Ionicons name="settings-outline" size={24} color="#000" />
         </TouchableOpacity>
         <View style={styles.profileSection}>
-          <View style={styles.profileImageWrapper}>
-            <View style={styles.profileImage} />
-          </View>
+          <TouchableOpacity style={styles.profileImageWrapper} onPress={handleEditPress} activeOpacity={0.8}>
+            <View style={[styles.profileImage, { justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }]}>
+              {profileImage ? (
+                <Image source={{ uri: profileImage }} style={{ width: 83, height: 83, borderRadius: 42 }} />
+              ) : (
+                <Ionicons name="person" size={60} color="#FFF" />
+              )}
+            </View>
+            <View style={styles.editBadge}>
+              <Ionicons name="camera" size={14} color="#FFF" />
+            </View>
+          </TouchableOpacity>
           <TouchableOpacity onPress={handleEditPress} activeOpacity={0.7}>
             <Text style={styles.profileName}>{user?.name || 'User'}</Text>
           </TouchableOpacity>
@@ -145,38 +225,8 @@ const ProfileScreen = () => {
           </View>
         </View>
 
-        {/* Shared Trails (Private) */}
-        <Text style={styles.journeysTitleClean}>Your Shared Trails</Text>
-        {loadingJourneys ? (
-          <Text style={{ marginLeft: 24, color: '#888' }}>Loading...</Text>
-        ) : sharedJourneys.length === 0 ? (
-          <Text style={{ marginLeft: 24, color: '#888' }}>No shared trails found.</Text>
-        ) : (
-          sharedJourneys.map(journey => (
-            <View key={journey._id} style={{ marginLeft: 24, marginBottom: 12, backgroundColor: '#fff', borderRadius: 10, padding: 12, elevation: 1 }}>
-              <Text style={{ fontWeight: 'bold', color: '#EE5C19' }}>{journey.title}</Text>
-              <Text style={{ color: '#888' }}>Distance: {journey.distance} km</Text>
-              <Text style={{ color: '#888' }}>Date: {journey.startTime ? new Date(journey.startTime).toLocaleDateString() : ''}</Text>
-            </View>
-          ))
-        )}
-
-        {/* Community Journeys (Public) */}
-        <Text style={styles.journeysTitleClean}>Community Journeys</Text>
-        {loadingJourneys ? (
-          <Text style={{ marginLeft: 24, color: '#888' }}>Loading...</Text>
-        ) : communityJourneys.length === 0 ? (
-          <Text style={{ marginLeft: 24, color: '#888' }}>No community journeys found.</Text>
-        ) : (
-          communityJourneys.map(journey => (
-            <View key={journey._id} style={{ marginLeft: 24, marginBottom: 12, backgroundColor: '#fff', borderRadius: 10, padding: 12, elevation: 1 }}>
-              <Text style={{ fontWeight: 'bold', color: '#FDAA2E' }}>{journey.title}</Text>
-              <Text style={{ color: '#888' }}>By: {journey.userId?.name || 'User'}</Text>
-              <Text style={{ color: '#888' }}>Distance: {journey.distance} km</Text>
-              <Text style={{ color: '#888' }}>Date: {journey.startTime ? new Date(journey.startTime).toLocaleDateString() : ''}</Text>
-            </View>
-          ))
-        )}
+       
+       
       </ScrollView>
 
       {/* Edit Profile Modal */}
@@ -187,9 +237,28 @@ const ProfileScreen = () => {
         onRequestClose={() => setEditModalVisible(false)}
       >
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', justifyContent: 'center', alignItems: 'center' }}>
-          <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '90%' }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 24, width: '90%', maxHeight: '85%' }}>
             <Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 16 }}>Edit Profile</Text>
-            <ScrollView>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Profile Picture Section */}
+              <View style={modalStyles.profilePictureSection}>
+                <TouchableOpacity onPress={showImageOptions} activeOpacity={0.8}>
+                  <View style={modalStyles.profileImageContainer}>
+                    {profileImage ? (
+                      <Image source={{ uri: profileImage }} style={modalStyles.profileImagePreview} />
+                    ) : (
+                      <View style={modalStyles.profileImagePlaceholder}>
+                        <Ionicons name="person" size={40} color="#888" />
+                      </View>
+                    )}
+                    <View style={modalStyles.cameraOverlay}>
+                      <Ionicons name="camera" size={18} color="#FFF" />
+                    </View>
+                  </View>
+                </TouchableOpacity>
+                <Text style={modalStyles.changePhotoText}>Tap to change photo</Text>
+              </View>
+
               <TextInput
                 style={modalStyles.input}
                 placeholder="Name"
@@ -231,12 +300,7 @@ const ProfileScreen = () => {
                 onChangeText={v => handleFormChange('phone', v)}
                 keyboardType="phone-pad"
               />
-              <TextInput
-                style={modalStyles.input}
-                placeholder="Avatar URL"
-                value={form.avatar}
-                onChangeText={v => handleFormChange('avatar', v)}
-              />
+
               <TextInput
                 style={modalStyles.input}
                 placeholder="Languages (comma separated)"
@@ -259,6 +323,51 @@ const ProfileScreen = () => {
   );
 };
 const modalStyles = StyleSheet.create({
+  profilePictureSection: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  profileImageContainer: {
+    position: 'relative',
+    width: 100,
+    height: 100,
+  },
+  profileImagePreview: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 3,
+    borderColor: '#EE5C19',
+  },
+  profileImagePlaceholder: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#E0E0E0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#EE5C19',
+  },
+  cameraOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#EE5C19',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  changePhotoText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#EE5C19',
+    fontWeight: '500',
+  },
   input: {
     borderWidth: 1,
     borderColor: '#EEE',
@@ -335,6 +444,19 @@ const styles = StyleSheet.create({
     height: 83,
     borderRadius: 42,
     backgroundColor: '#D9D9D9',
+  },
+  editBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#EE5C19',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FDF0E0',
   },
   levelBadge: {
     position: 'absolute',

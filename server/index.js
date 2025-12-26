@@ -47,6 +47,9 @@ import {
   deleteWalk
 } from "./controllers/walking.controller.js";
 
+// AI Search controller
+import { aiSearch } from "./controllers/aiSearch.controller.js";
+
 
 
 dotenv.config();
@@ -97,6 +100,9 @@ app.post("/walking/:id/like", likeWalk);
 app.post("/walking/:id/comment", commentWalk);
 app.get("/walking/:id/comments", getWalkComments);
 app.delete("/walking/:id", deleteWalk);
+
+// ===== AI Search Route =====
+app.post("/search/ai", aiSearch);
 
 
 app.get("/seed-all", async (req, res) => {
