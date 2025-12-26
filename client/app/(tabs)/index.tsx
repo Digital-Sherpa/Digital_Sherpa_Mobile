@@ -18,8 +18,8 @@ export default function HomeScreen() {
   const [selectedRoute, setSelectedRoute] = useState<SuggestedRoute | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   
-  // Featured event state
-  const [featuredEvent, setFeaturedEvent] = useState<Event | null>(null);
+  // Featured events state (now array for multiple events)
+  const [featuredEvents, setFeaturedEvents] = useState<Event[]>([]);
   const [eventLoading, setEventLoading] = useState(true);
 
   // Fallback images for routes without cover images
@@ -41,16 +41,16 @@ export default function HomeScreen() {
     }
   }, []);
 
-  // Fetch featured event from backend
-  const fetchFeaturedEvent = useCallback(async () => {
+  // Fetch featured events from backend
+  const fetchFeaturedEvents = useCallback(async () => {
     try {
       setEventLoading(true);
       const response = await api.getFeaturedEvents();
       if (response.success && response.events.length > 0) {
-        setFeaturedEvent(response.events[0]);
+        setFeaturedEvents(response.events);
       }
     } catch (error) {
-      console.error('Failed to fetch featured event:', error);
+      console.error('Failed to fetch featured events:', error);
     } finally {
       setEventLoading(false);
     }
@@ -58,8 +58,8 @@ export default function HomeScreen() {
 
   useEffect(() => {
     fetchSuggestedRoutes();
-    fetchFeaturedEvent();
-  }, [fetchSuggestedRoutes, fetchFeaturedEvent]);
+    fetchFeaturedEvents();
+  }, [fetchSuggestedRoutes, fetchFeaturedEvents]);
 
   // Navigate to explore page with route details
   const handleNavigateToExplore = (route: SuggestedRoute) => {
@@ -263,71 +263,75 @@ export default function HomeScreen() {
             </ScrollView>
           </View>
 
-          {/* Featured Event */}
+          {/* Featured Events - horizontal scroll */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Featured Event:</Text>
-            <TouchableOpacity
-              style={styles.featuredCard}
-              activeOpacity={0.9}
-              disabled={eventLoading || !featuredEvent}
-              onPress={() => {
-                if (featuredEvent && featuredEvent.locations && featuredEvent.locations.length > 0) {
-                  const loc = featuredEvent.locations[0];
-                  router.push({
-                    pathname: '/(tabs)/explore',
-                    params: {
-                      eventId: featuredEvent._id,
-                      eventName: featuredEvent.name,
-                      eventLat: loc.coordinates?.lat,
-                      eventLng: loc.coordinates?.lng,
-                      eventDesc: featuredEvent.description || '',
-                      eventCategory: featuredEvent.category || '',
-                    },
-                  });
-                }
-              }}
-            >
-              {eventLoading ? (
-                <View style={styles.featuredLoading}>
-                  <ActivityIndicator size="small" color="#E45C12" />
-                </View>
-              ) : featuredEvent ? (
-                <>
-                  <Image
-                    source={{ uri: featuredEvent.imageUrl }}
-                    style={styles.featuredImage}
-                    contentFit="cover"
-                  />
-                  <LinearGradient
-                    colors={['transparent', featuredEvent.color || 'rgba(0,0,0,0.8)']}
-                    style={styles.featuredGradient}
+            <Text style={styles.sectionTitle}>Featured Events:</Text>
+            {eventLoading ? (
+              <View style={styles.featuredLoading}>
+                <ActivityIndicator size="small" color="#E45C12" />
+              </View>
+            ) : featuredEvents.length > 0 ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {featuredEvents.map((event) => (
+                  <TouchableOpacity
+                    key={event._id}
+                    style={[styles.featuredCard, { marginRight: 12, width: 280 }]}
+                    activeOpacity={0.9}
+                    onPress={() => {
+                      if (event.locations && event.locations.length > 0) {
+                        const loc = event.locations[0];
+                        router.push({
+                          pathname: '/(tabs)/explore',
+                          params: {
+                            eventId: event._id,
+                            eventName: event.name,
+                            eventLat: loc.coordinates?.lat,
+                            eventLng: loc.coordinates?.lng,
+                            eventDescription: event.description || '',
+                            eventCategory: event.category || '',
+                            eventDate: event.startDate || '',
+                            eventAddress: loc.address || '',
+                          },
+                        });
+                      }
+                    }}
                   >
-                    <View style={styles.featuredHeader}>
-                      <Text style={styles.featuredIcon}>{featuredEvent.icon}</Text>
-                      <Text style={styles.featuredCategory}>{featuredEvent.category?.toUpperCase()}</Text>
-                    </View>
-                    <Text style={styles.featuredTitle}>{featuredEvent.name}</Text>
-                    {featuredEvent.description ? (
-                      <Text style={styles.featuredDescription}>{featuredEvent.description}</Text>
-                    ) : null}
-                    {featuredEvent.locations && featuredEvent.locations.length > 0 && (
-                      <Text style={styles.featuredLocation}>
-                        📍 {featuredEvent.locations[0].name}, {featuredEvent.locations[0].address}
-                      </Text>
-                    )}
-                    {featuredEvent.startDate && (
-                      <Text style={styles.featuredDate}>
-                        📅 {new Date(featuredEvent.startDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                      </Text>
-                    )}
-                  </LinearGradient>
-                </>
-              ) : (
-                <View style={styles.featuredLoading}>
-                  <Text style={styles.noEventText}>No featured event</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+                    <Image
+                      source={{ uri: event.imageUrl }}
+                      style={styles.featuredImage}
+                      contentFit="cover"
+                    />
+                    <LinearGradient
+                      colors={['transparent', event.color || 'rgba(0,0,0,0.8)']}
+                      style={styles.featuredGradient}
+                    >
+                      <View style={styles.featuredHeader}>
+                        <Text style={styles.featuredIcon}>{event.icon}</Text>
+                        <Text style={styles.featuredCategory}>{event.category?.toUpperCase()}</Text>
+                      </View>
+                      <Text style={styles.featuredTitle} numberOfLines={1}>{event.name}</Text>
+                      {event.description ? (
+                        <Text style={styles.featuredDescription} numberOfLines={2}>{event.description}</Text>
+                      ) : null}
+                      {event.locations && event.locations.length > 0 && (
+                        <Text style={styles.featuredLocation}>
+                          📍 {event.locations[0].name}
+                        </Text>
+                      )}
+                      {event.startDate && (
+                        <Text style={styles.featuredDate}>
+                          📅 {new Date(event.startDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+                        </Text>
+                      )}
+                    </LinearGradient>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <View style={[styles.featuredCard, styles.featuredLoading]}>
+                <Text style={styles.noEventText}>No featured events</Text>
+              </View>
+            )}
           </View>
 
           {/* Suggested Roadmaps */}
@@ -599,7 +603,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 16, 
     borderTopRightRadius: 16,
     borderBottomRightRadius: 16,
-    borderBottomLeftRadius: 88,
+    borderBottomLeftRadius: 25,
     marginRight: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
@@ -675,14 +679,27 @@ const styles = StyleSheet.create({
     zIndex: 1000,
     width: 56,
     height: 56,
+    backgroundColor: '#25E88A',
     borderTopRightRadius: 16,
     borderBottomLeftRadius: 56,
     borderTopLeftRadius: 56,
     borderBottomRightRadius: 56,
-    backgroundColor: '#25E88A',
     justifyContent: 'center',
     alignItems: 'center',
   },
+
+
+  /* Rectangle 2 */
+
+// position: absolute;
+// width: 56px;
+// height: 56px;
+// left: 0px;
+// top: 200px;
+
+// background: #25E88A;
+// border-radius: 56px 16px 56px 56px;
+
 
 
   loadingContainer: {

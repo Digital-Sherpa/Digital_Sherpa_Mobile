@@ -19,12 +19,13 @@ import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import * as Location from 'expo-location';
 import * as SecureStore from 'expo-secure-store';
 import ViewShot, { captureRef } from "react-native-view-shot";
 import { api, Place, Trail } from '@/services/api';
 import { useAuth } from '../../context/AuthContext';
+import * as Speech from 'expo-speech';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -461,7 +462,7 @@ const getMapHTML = (markers: MapMarker[], showRouteLine: boolean = true, routeCo
     window.startUserTrail = function(lat, lng) {
       if (window.userTrailLine) map.removeLayer(window.userTrailLine);
       window.userTrailLine = L.polyline([[lat, lng]], {
-        color: '#8A2BE2', // BlueViolet
+        color: '#4CAF50', // Green for active trail
         weight: 4,
         opacity: 0.8,
         lineCap: 'round',
@@ -587,35 +588,42 @@ export default function ExploreScreen() {
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ type?: string; id?: string; slug?: string; eventLat?: string; eventLng?: string; eventName?: string; eventAddress?: string; eventDescription?: string; eventCategory?: string; eventDate?: string }>();
+  const params = useLocalSearchParams<{ type?: string; id?: string; slug?: string; eventId?: string; eventLat?: string; eventLng?: string; eventName?: string; eventAddress?: string; eventDescription?: string; eventCategory?: string; eventDate?: string; refreshId?: string; startRecording?: string }>();
 
 
   // Handle event params to show event as selected place
   // Prevent repeated reloads for the same event params
-  const lastEventParams = useRef<{lat?: string, lng?: string, name?: string} | null>(null);
+  const lastEventParams = useRef<{id?: string, lat?: string, lng?: string, name?: string} | null>(null);
   useEffect(() => {
-    if (params.eventLat && params.eventLng && params.eventName) {
+    // If refreshId is present, we skip this effect to prioritize the reset
+    if (params.refreshId) return;
+
+    // Check if we have at least an event name or ID 
+    if (params.eventName || params.eventId) {
       const isSame =
         lastEventParams.current &&
-        lastEventParams.current.lat === params.eventLat &&
-        lastEventParams.current.lng === params.eventLng &&
-        lastEventParams.current.name === params.eventName;
+        ((params.eventId && lastEventParams.current.id === params.eventId) || 
+         (params.eventName && lastEventParams.current.name === params.eventName && lastEventParams.current.lat === params.eventLat));
+      
       if (isSame) return;
+
       lastEventParams.current = {
+        id: params.eventId,
         lat: params.eventLat,
         lng: params.eventLng,
         name: params.eventName,
       };
+
       // Create a pseudo-place for the event
-      const eventPlace = {
-        _id: params.id || 'event',
-        name: params.eventName,
+      const eventPlace: Place & { isEvent?: boolean; eventDate?: string } = {
+        _id: params.eventId || params.id || 'event',
+        name: params.eventName || 'Event',
         slug: params.id || 'event',
         description: params.eventDescription || '',
         category: params.eventCategory || '',
         coordinates: {
-          lat: Number(params.eventLat),
-          lng: Number(params.eventLng),
+          lat: Number(params.eventLat) || 27.7172, // Default to Kathmandu if missing
+          lng: Number(params.eventLng) || 85.3240,
         },
         imageUrl: '',
         gallery: [],
@@ -629,29 +637,41 @@ export default function ExploreScreen() {
         isEvent: true,
         eventDate: params.eventDate || '',
       };
+      
       setSelectedPlace(eventPlace);
       setSelectedTrail(null);
       setDisplayStops([]);
       setCurrentStopIndex(0);
-      setMapMarkers([
-        {
-          id: `event-${eventPlace._id}`,
-          name: eventPlace.name,
-          lat: eventPlace.coordinates.lat,
-          lng: eventPlace.coordinates.lng,
-          type: 'place' as const,
-        },
-      ]);
+      
+      // Only set map markers if we have valid coordinates
+      if (params.eventLat && params.eventLng) {
+        setMapMarkers([
+            {
+            id: `event-${eventPlace._id}`,
+            name: eventPlace.name,
+            lat: eventPlace.coordinates.lat,
+            lng: eventPlace.coordinates.lng,
+            type: 'place' as const,
+            },
+        ]);
+      } else {
+        setMapMarkers([]);
+      }
+      
       setShowDetail(true);
-      // Removed setMapKey - markers are now updated via JS injection
+      setIsLoading(false); // Force loading off since we have the data directly from params
     }
-  }, [params.eventLat, params.eventLng, params.eventName, params.id, params.eventDescription, params.eventAddress, params.eventCategory, params.eventDate]);
+  }, [params.eventLat, params.eventLng, params.eventName, params.id, params.eventId, params.eventDescription, params.eventAddress, params.eventCategory, params.eventDate]);
+
+
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [searchQuery, setSearchQuery] = useState('');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isTracking, setIsTracking] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [isRecording, setIsRecording] = useState(false); // Standalone recording mode
   const webViewRef = useRef<WebView>(null);
   const viewShotRef = useRef<ViewShot>(null);
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
@@ -666,9 +686,9 @@ export default function ExploreScreen() {
   const [isSavingWalk, setIsSavingWalk] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   
-  // Timer Logic
+  // Timer Logic - works for both navigation and recording
   useEffect(() => {
-    if (isNavigating) {
+    if (isNavigating || isRecording) {
       timerRef.current = setInterval(() => {
         setWalkTimer(t => t + 1);
       }, 1000) as unknown as NodeJS.Timeout;
@@ -676,8 +696,7 @@ export default function ExploreScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [isNavigating]);
-
+  }, [isNavigating, isRecording]);
   // Compute stats
   const walkStats = useMemo(() => {
     let distance = 0;
@@ -730,6 +749,179 @@ export default function ExploreScreen() {
   const [showDetail, setShowDetail] = useState(!isDirectVisit);
   // Collapsible state for stops
   const [expandedStopIndex, setExpandedStopIndex] = useState(-1);
+  // Quest System State
+  const [nearbyStopIndex, setNearbyStopIndex] = useState<number>(-1);
+
+  // Clear state when visiting explore tab directly (fresh start)
+  const lastClearedId = useRef<string | null>(null);
+   useFocusEffect(
+    useCallback(() => {
+      // Check if we have active params that define a route/event context
+      const hasActiveContext = params.type || params.id || params.slug || params.eventLat || params.eventLng || params.eventId;
+      
+      const shouldClear = 
+        // Case 1: Explicit refresh (Tab press) - Only run ONCE per ID
+        (params.refreshId && params.refreshId !== lastClearedId.current) ||
+        // Case 2: No context and NOT recording/saving - preventing accidental clears
+        (!params.refreshId && !hasActiveContext && !isRecording && !capturedImage);
+
+      if (shouldClear) {
+        if (params.refreshId) {
+            lastClearedId.current = params.refreshId;
+        }
+        // Only trigger updates if state is not already clear (prevents infinite loop)
+        if (selectedTrail || selectedPlace || displayStops.length > 0 || mapMarkers.length > 0 || showDetail || lastEventParams.current) {
+            setSelectedTrail(null);
+            setSelectedPlace(null);
+            setDisplayStops([]);
+            setMapMarkers([]);
+            setShowDetail(false);
+            setSearchQuery('');
+            lastEventParams.current = null; // Crucial: Reset event params ref so re-visiting same event works
+            // Reset map markers via JS - optional, but ensuring state is clear should be enough
+        }
+        
+        // Also clear any previous recording state if not active
+        if (!isRecording && (walkTimer > 0 || walkLocations.length > 0 || capturedImage)) {
+            setWalkTimer(0);
+            setWalkLocations([]);
+            setCapturedImage(null);
+        }
+      }
+    }, [params, isRecording, capturedImage]) // re-added dependencies to safely check state in condition
+  );
+
+  // Track spoken stops to avoid repeating
+  const spokenStopsRef = useRef<Set<number>>(new Set());
+
+  // Haversine distance helper (meters)
+  const getDistance = useCallback((lat1: number, lng1: number, lat2: number, lng2: number): number => {
+    const R = 6371e3;
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }, []);
+
+  // Location tracking - show user location on map and update trail during navigation
+  useEffect(() => {
+    let locationSub: Location.LocationSubscription | null = null;
+    
+    const startTracking = async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setLocationError('Location permission denied');
+        return;
+      }
+      
+      // Get initial location
+      const initialLoc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+      const initLat = initialLoc.coords.latitude;
+      const initLng = initialLoc.coords.longitude;
+      setUserLocation({ lat: initLat, lng: initLng });
+      
+      // Update map with initial user location (purple circle)
+      if (webViewRef.current) {
+        webViewRef.current.injectJavaScript(`
+          if (window.updateUserLocation) {
+            window.updateUserLocation(${initLat}, ${initLng}, true);
+          }
+          true;
+        `);
+      }
+      
+      // Start watching location
+      locationSub = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          timeInterval: 2000,
+          distanceInterval: 5,
+        },
+        (location) => {
+          const lat = location.coords.latitude;
+          const lng = location.coords.longitude;
+          setUserLocation({ lat, lng });
+          
+          // Update user marker on map (purple circle)
+          if (webViewRef.current) {
+            webViewRef.current.injectJavaScript(`
+              if (window.updateUserLocation) {
+                window.updateUserLocation(${lat}, ${lng}, false);
+              }
+              true;
+            `);
+          }
+          
+          // Update trail during navigation OR recording (green line)
+          if (isNavigating || isRecording) {
+            setWalkLocations(prev => [...prev, { lat, lng }]);
+            if (webViewRef.current) {
+              webViewRef.current.injectJavaScript(`
+                if (window.updateUserTrail) {
+                  window.updateUserTrail(${lat}, ${lng});
+                }
+                true;
+              `);
+            }
+            
+            // Check proximity to checkpoints and speak description (only for navigation)
+            if (isNavigating) {
+              displayStops.forEach((stop, index) => {
+                const dist = getDistance(lat, lng, stop.lat, stop.lng);
+                
+                // Quest / Checkpoint Logic
+                if (dist < 50 && !stop.completed) {
+                   // If we haven't already popped up for this stop (or it's not the current one we are showing)
+                   if (nearbyStopIndex !== index) {
+                      setNearbyStopIndex(index);
+                      // Optional: Haptic feedback here
+                   }
+                } else if (dist >= 60 && nearbyStopIndex === index) {
+                   // Auto-dismiss if walked away (hysteresis)
+                   setNearbyStopIndex(-1);
+                }
+
+                if (!spokenStopsRef.current.has(index)) {
+                  if (dist < 50) { // Within 50 meters
+                    spokenStopsRef.current.add(index);
+                    const textToSpeak = stop.description || `You have arrived at ${stop.name}`;
+                    Speech.speak(textToSpeak, {
+                      language: 'en',
+                      pitch: 1.0,
+                      rate: 0.9,
+                    });
+                  }
+                }
+              });
+            }
+          }
+        }
+      );
+      
+      setIsTracking(true);
+    };
+    
+    startTracking();
+    
+    return () => {
+      if (locationSub) {
+        locationSub.remove();
+      }
+      setIsTracking(false);
+    };
+  }, [isNavigating, isRecording, displayStops, getDistance]);
+
+  // Reset spoken stops when navigation starts
+  useEffect(() => {
+    if (isNavigating) {
+      spokenStopsRef.current = new Set();
+    }
+  }, [isNavigating]);
 
   // Select a trail and prepare display stops
   const selectTrail = useCallback((trail: Trail) => {
@@ -864,7 +1056,7 @@ export default function ExploreScreen() {
     // Capture Snapshot of the map
     try {
       if (viewShotRef.current) {
-         const uri = await viewShotRef.current?.capture();
+
          // Convert to base64 if needed, or upload. For simplicity we'll pass URI to modal
          // But API expects base64 or hosted URL. 
          // view-shot can capture to data-uri.
@@ -893,6 +1085,84 @@ export default function ExploreScreen() {
     setShowSaveModal(true);
   }, []);
 
+  // Start standalone recording from current location
+  const startRecording = useCallback(() => {
+    if (!userLocation) {
+      Alert.alert('Location Required', 'Please enable location services to start recording.');
+      return;
+    }
+    
+    // Clear any previous walk data
+    setWalkTimer(0);
+    setWalkLocations([userLocation]);
+    setCapturedImage(null);
+    setSaveTitle('');
+    setSaveCaption('');
+    
+    // Hide detail panel to show full map
+    setShowDetail(false);
+    setIsRecording(true);
+    
+    // Start green trail from current location
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        if (window.startUserTrail) {
+          window.startUserTrail(${userLocation.lat}, ${userLocation.lng});
+        }
+        true;
+      `);
+    }
+  }, [userLocation]);
+
+  // Auto-start recording if requested via params (e.g. from Record Tab)
+  const lastRecordId = useRef<string | null>(null);
+  useEffect(() => {
+    if (params.startRecording === 'true' && params.refreshId && userLocation && params.refreshId !== lastRecordId.current) {
+        if (!isRecording) {
+            // Brief delay to ensure state is clean
+            setTimeout(() => {
+                startRecording();
+                lastRecordId.current = params.refreshId as string;
+            }, 500);
+        }
+    }
+  }, [params.startRecording, params.refreshId, userLocation, isRecording, startRecording]);
+
+  // Stop recording and show save modal
+  const stopRecording = useCallback(async () => {
+    let capturedBase64 = null;
+    
+    // Capture Snapshot FIRST while view is stable
+    try {
+      if (viewShotRef.current) {
+         // Small delay to ensure stability if user just stopped moving
+         await new Promise(r => setTimeout(r, 100));
+         
+         const base64 = await captureRef(viewShotRef, {
+          format: "jpg",
+          quality: 0.8,
+          result: "base64"
+        });
+        capturedBase64 = base64;
+      }
+    } catch (e) {
+      console.error("Snapshot failed", e);
+    }
+
+    // Now update state
+    setIsRecording(false);
+    
+    // Stop timer
+    if (timerRef.current) clearInterval(timerRef.current);
+    
+    // Set image and open modal
+    if (capturedBase64) {
+        setCapturedImage(`data:image/jpeg;base64,${capturedBase64}`);
+    }
+    
+    // Open Save Modal
+    setShowSaveModal(true);
+  }, []);
 
 
   // Start navigation to a place (single destination)
@@ -1309,32 +1579,42 @@ export default function ExploreScreen() {
         {/* Map Section (top 50%) */}
         <View style={{ flex: 1 }}>
           <ViewShot ref={viewShotRef} options={{ format: "jpg", quality: 0.9 }} style={{ flex: 1, paddingBottom: !showDetail ? 70 : 0 }}>
-             {/* Stats Overlay during Walk */}
-             {isNavigating && (
-                <View style={[styles.walkOverlay, { top: insets.top + 10 }]}>
-                    <View style={styles.statItem}>
-                        <Text style={styles.statLabel}>Time</Text>
-                        <Text style={styles.statValue}>{new Date(walkTimer * 1000).toISOString().substr(11, 8)}</Text>
-                    </View>
-                    <View style={styles.statItem}>
-                        <Text style={styles.statLabel}>Dist</Text>
-                        <Text style={styles.statValue}>{(walkStats.distance / 1000).toFixed(2)} km</Text>
-                    </View>
-                </View>
-             )}
+            <View style={{ flex: 1 }} collapsable={false}>
+              {/* Stats Overlay during Walk */}
+              {isNavigating && (
+                  <View style={[styles.walkOverlay, { top: insets.top + 10 }]}>
+                      <View style={styles.statItem}>
+                          <Text style={styles.statLabel}>Time</Text>
+                          <Text style={styles.statValue}>{new Date(walkTimer * 1000).toISOString().substr(11, 8)}</Text>
+                      </View>
+                      <View style={styles.statItem}>
+                          <Text style={styles.statLabel}>Dist</Text>
+                          <Text style={styles.statValue}>{(walkStats.distance / 1000).toFixed(2)} km</Text>
+                      </View>
+                  </View>
+              )}
 
-            <WebView
-              key="explore-map-main"
-              ref={webViewRef}
-              source={{ html: mapHTML }}
-              style={[styles.map, { flex: 1 }]}
-              scrollEnabled={false}
-              javaScriptEnabled={true}
-              domStorageEnabled={true}
-              onLoadEnd={() => {
-                // ...
-              }}
-            />
+              <WebView
+                key="explore-map-main"
+                ref={webViewRef}
+                source={{ html: mapHTML }}
+                style={[styles.map, { flex: 1 }]}
+                scrollEnabled={false}
+                javaScriptEnabled={true}
+                domStorageEnabled={true}
+                onLoadEnd={() => {
+                  // Re-inject startup scripts if needed
+                  if (userLocation) {
+                    webViewRef.current?.injectJavaScript(`
+                      if (window.updateUserLocation) {
+                        window.updateUserLocation(${userLocation.lat}, ${userLocation.lng}, ${15});
+                      }
+                      true;
+                    `);
+                  }
+                }}
+              />
+            </View>
           </ViewShot>
           {/* Improved Center on user button */}
           <TouchableOpacity style={recenterButtonStyle} onPress={centerOnUser} activeOpacity={0.8}>
@@ -1344,6 +1624,36 @@ export default function ExploreScreen() {
               color={userLocation ? "#4285F4" : "#999"} 
             />
           </TouchableOpacity>
+
+
+
+          {/* Recording Stats Overlay - shown during recording */}
+          {isRecording && (
+            <View style={styles.recordingOverlay}>
+              <View style={styles.recordingIndicator}>
+                <View style={styles.recordingDot} />
+                <Text style={styles.recordingText}>Recording</Text>
+              </View>
+              <View style={styles.recordingStats}>
+                <View style={styles.statItem}>
+                  <Text style={styles.statLabel}>TIME</Text>
+                  <Text style={styles.statValue}>{new Date(walkTimer * 1000).toISOString().substr(11, 8)}</Text>
+                </View>
+                <View style={styles.statItem}>
+                  <Text style={styles.statLabel}>DIST</Text>
+                  <Text style={styles.statValue}>{(walkStats.distance / 1000).toFixed(2)} km</Text>
+                </View>
+              </View>
+              <TouchableOpacity 
+                style={styles.stopRecordingButton}
+                onPress={stopRecording}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="stop" size={20} color="#fff" />
+                <Text style={styles.stopRecordingText}>Stop</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {/* Hide search/filter UI if detail is hidden */}
           {showDetail && <>
@@ -1381,8 +1691,8 @@ export default function ExploreScreen() {
           </>}
         </View>
 
-        {/* Show button to reappear detail page if hidden */}
-        {!showDetail && (
+        {/* Show button to reappear detail page if hidden - ONLY if we have a trail/place selected */}
+        {!showDetail && (selectedTrail || selectedPlace) && (
           <View
             pointerEvents="box-none"
             style={{
@@ -1415,6 +1725,65 @@ export default function ExploreScreen() {
               <Text style={{ color: '#E45C12', fontWeight: '600', fontSize: 16, marginLeft: 8 }}>Show Details</Text>
             </TouchableOpacity>
           </View>
+        )}
+
+        {/* Quest Collection Overlay */}
+        {nearbyStopIndex !== -1 && (
+            <View style={{
+                position: 'absolute',
+                bottom: 140, // Above bottom sheet / controls
+                left: 20,
+                right: 20,
+                backgroundColor: '#FFF',
+                borderRadius: 16,
+                padding: 16,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.2,
+                shadowRadius: 10,
+                elevation: 10,
+                zIndex: 2000,
+                flexDirection: 'row',
+                alignItems: 'center',
+                borderWidth: 1,
+                borderColor: '#FFD700' // Gold border for quest
+            }}>
+                <View style={{ 
+                    width: 48, height: 48, borderRadius: 24, backgroundColor: '#FFF9C4', 
+                    justifyContent: 'center', alignItems: 'center', marginRight: 12
+                }}>
+                    <Ionicons name="trophy" size={24} color="#FBC02D" />
+                </View>
+                <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, color: '#666', fontWeight: '600' }}>Checkpoint Reached!</Text>
+                    <Text style={{ fontSize: 16, color: '#000', fontWeight: 'bold' }} numberOfLines={1}>
+                        {displayStops[nearbyStopIndex]?.name}
+                    </Text>
+                </View>
+                <TouchableOpacity 
+                    style={{
+                        backgroundColor: '#FBC02D',
+                        paddingHorizontal: 16,
+                        paddingVertical: 10,
+                        borderRadius: 24
+                    }}
+                    onPress={() => {
+                        // Collect Quest Handler
+                        if (nearbyStopIndex !== -1) {
+                            const newStops = [...displayStops];
+                            if (newStops[nearbyStopIndex]) {
+                                newStops[nearbyStopIndex].completed = true;
+                                setDisplayStops(newStops);
+                                setNearbyStopIndex(-1);
+                                // Optional: Play sound or show localized alert
+                                Alert.alert("Quest Completed!", `You've collected ${newStops[nearbyStopIndex].name}`);
+                            }
+                        }
+                    }}
+                >
+                    <Text style={{ color: '#000', fontWeight: 'bold' }}>Collect</Text>
+                </TouchableOpacity>
+            </View>
         )}
 
         {/* Bottom Sheet with Trail/Place Info (bottom 50%) */}
@@ -1655,46 +2024,94 @@ export default function ExploreScreen() {
       </View>
 
       {/* Save Walk Modal */}
-      <Modal visible={showSaveModal} animationType="slide" transparent>
+      <Modal visible={showSaveModal} animationType="fade" transparent>
         <View style={styles.modalOverlay}>
-            <View style={styles.saveModalContent}>
-                <Text style={styles.saveModalTitle}>Save Your Walk</Text>
-                {capturedImage && (
-                    <Image source={{ uri: capturedImage }} style={styles.capturedPreview} resizeMode="cover" />
-                )}
+            <View style={styles.saveModalCard}>
                 
-                <Text style={styles.saveStatText}>
-                    Duration: {new Date(walkTimer * 1000).toISOString().substr(11, 8)} • Dist: {(walkStats.distance / 1000).toFixed(2)} km
-                </Text>
+                {/* Header Image */}
+                <View style={styles.modalHeaderImageContainer}>
+                  {capturedImage ? (
+                      <Image source={{ uri: capturedImage }} style={styles.headerImage} resizeMode="cover" />
+                  ) : (
+                      <View style={[styles.headerImage, { backgroundColor: '#eee', alignItems: 'center', justifyContent: 'center' }]}>
+                        <Ionicons name="map" size={48} color="#ccc" />
+                      </View>
+                  )}
+                  <LinearGradient
+                    colors={['transparent', 'rgba(0,0,0,0.7)']}
+                    style={styles.headerGradient}
+                  />
+                  <Text style={styles.headerTitleOverlay}>Journey Complete!</Text>
+                </View>
 
-                <TextInput 
-                    placeholder="Title (e.g. Morning Walk)"
-                    style={styles.saveInput}
-                    value={saveTitle}
-                    onChangeText={setSaveTitle}
-                />
-                <TextInput 
-                    placeholder="Caption (Optional)"
-                    style={[styles.saveInput, { height: 80, textAlignVertical: 'top' }]}
-                    multiline
-                    value={saveCaption}
-                    onChangeText={setSaveCaption}
-                />
+                <View style={styles.saveFormContent}>
+                    {/* Stats Row */}
+                    <View style={styles.statsBadgeRow}>
+                        <View style={styles.statsBadge}>
+                            <Ionicons name="time" size={16} color="#E45C12" />
+                            <View>
+                                <Text style={styles.badgeLabel}>DURATION</Text>
+                                <Text style={styles.badgeValue}>{new Date(walkTimer * 1000).toISOString().substr(11, 8)}</Text>
+                            </View>
+                        </View>
+                        <View style={styles.separator} />
+                        <View style={styles.statsBadge}>
+                            <Ionicons name="walk" size={16} color="#E45C12" />
+                            <View>
+                                <Text style={styles.badgeLabel}>DISTANCE</Text>
+                                <Text style={styles.badgeValue}>{(walkStats.distance / 1000).toFixed(2)} km</Text>
+                            </View>
+                        </View>
+                    </View>
 
-                <TouchableOpacity 
-                    style={styles.saveButton}
-                    onPress={handleSaveWalk}
-                    disabled={isSavingWalk}
-                >
-                    {isSavingWalk ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveButtonText}>Save Journey</Text>}
-                </TouchableOpacity>
+                    <Text style={styles.inputLabel}>Title</Text>
+                    <TextInput 
+                        placeholder="Name your journey"
+                        style={styles.saveInput}
+                        value={saveTitle}
+                        onChangeText={setSaveTitle}
+                        placeholderTextColor="#999"
+                    />
 
-                <TouchableOpacity 
-                    style={styles.cancelButton}
-                    onPress={() => setShowSaveModal(false)}
-                >
-                    <Text style={styles.cancelButtonText}>Discard</Text>
-                </TouchableOpacity>
+                    <Text style={styles.inputLabel}>Caption</Text>
+                    <TextInput 
+                        placeholder="Add a note about your walk..."
+                        style={[styles.saveInput, { height: 100, textAlignVertical: 'top' }]}
+                        multiline
+                        value={saveCaption}
+                        onChangeText={setSaveCaption}
+                        placeholderTextColor="#999"
+                    />
+
+                    <TouchableOpacity 
+                        style={styles.saveButton}
+                        onPress={handleSaveWalk}
+                        disabled={isSavingWalk}
+                    >
+                        <LinearGradient
+                            colors={['#E45C12', '#D94A00']}
+                            style={styles.saveButtonGradient}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                        >
+                            {isSavingWalk ? (
+                                <ActivityIndicator color="#fff" />
+                            ) : (
+                                <>
+                                    <Ionicons name="save-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+                                    <Text style={styles.saveButtonText}>Save Journey</Text>
+                                </>
+                            )}
+                        </LinearGradient>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
+                        style={styles.cancelButton}
+                        onPress={() => setShowSaveModal(false)}
+                    >
+                        <Text style={styles.cancelButtonText}>Discard Journey</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
         </View>
       </Modal>
@@ -1738,50 +2155,115 @@ const styles = StyleSheet.create({
     color: '#E45C12',
     fontWeight: '700',
   },
-  saveModalContent: {
+  saveModalCard: {
     backgroundColor: '#fff',
     width: '90%',
-    borderRadius: 20,
-    padding: 24,
-    maxHeight: '80%',
+    borderRadius: 24,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
+    maxHeight: '85%',
   },
-  saveModalTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#000',
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  capturedPreview: {
+  modalHeaderImageContainer: {
+    height: 180,
     width: '100%',
-    height: 150,
-    borderRadius: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#eee',
+    position: 'relative',
   },
-  saveStatText: {
+  headerImage: {
+    width: '100%',
+    height: '100%',
+  },
+  headerGradient: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 80,
+  },
+  headerTitleOverlay: {
+    position: 'absolute',
+    bottom: 16,
+    left: 20,
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+    textShadowColor: 'rgba(0,0,0,0.3)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  saveFormContent: {
+    padding: 24,
+  },
+  statsBadgeRow: {
+    flexDirection: 'row',
+    backgroundColor: '#FFF0E0',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 24,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  statsBadge: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    justifyContent: 'center',
+  },
+  separator: {
+    width: 1,
+    height: '80%',
+    backgroundColor: '#E45C12',
+    opacity: 0.2,
+    marginHorizontal: 8,
+  },
+  badgeLabel: {
+    fontSize: 10,
+    color: '#E45C12',
+    fontWeight: '700',
+    opacity: 0.8,
+    marginBottom: 2,
+  },
+  badgeValue: {
+    fontSize: 16,
+    color: '#333',
+    fontWeight: '700',
+  },
+  inputLabel: {
     fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 20,
-    fontWeight: '500',
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+    marginLeft: 4,
   },
   saveInput: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#F9F9F9',
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
-    marginBottom: 16,
+    marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#E8E8E8',
+    borderColor: '#EEEEEE',
+    color: '#333',
   },
   saveButton: {
-    backgroundColor: '#E45C12',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
     marginTop: 8,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#E45C12',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  saveButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
   },
   saveButtonText: {
     color: '#fff',
@@ -1791,11 +2273,12 @@ const styles = StyleSheet.create({
   cancelButton: {
     paddingVertical: 16,
     alignItems: 'center',
+    marginTop: 12,
   },
   cancelButtonText: {
-    color: '#666',
-    fontSize: 16,
-    fontWeight: '500',
+    color: '#999',
+    fontSize: 14,
+    fontWeight: '600',
   },
   container: {
     flex: 1,
@@ -2179,5 +2662,78 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
+  },
+  // Record button styles
+  recordButton: {
+    position: 'absolute',
+    bottom: 20,
+    left: 20,
+    borderRadius: 30,
+    overflow: 'hidden',
+    shadowColor: '#E45C12',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+    zIndex: 100, // Ensure it sits on top
+  },
+  recordButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    gap: 8,
+  },
+  recordButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // Recording overlay styles
+  recordingOverlay: {
+    position: 'absolute',
+    bottom: 20,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    borderRadius: 20,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  recordingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  recordingDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#FF3B30',
+  },
+  recordingText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  recordingStats: {
+    flexDirection: 'row',
+    gap: 24,
+  },
+  stopRecordingButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FF3B30',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    gap: 6,
+  },
+  stopRecordingText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

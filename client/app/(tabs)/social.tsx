@@ -53,16 +53,18 @@ function timeAgo(dateString: string): string {
 interface YourWalkCardProps {
   walk: Walking;
   onShare: (walk: Walking) => void;
+  onAction: (walk: Walking) => void;
+  onZoom: (imageUrl: string) => void;
 }
 
-const YourWalkCard = ({ walk, onShare }: YourWalkCardProps) => {
+const YourWalkCard = ({ walk, onShare, onAction, onZoom }: YourWalkCardProps) => {
   return (
     <View style={styles.yourJourneyCard}>
       {/* Map Image Thumbnail */}
       {walk.mapImage ? (
-        <View style={styles.thumbnailContainer}>
+        <TouchableOpacity style={styles.thumbnailContainer} onPress={() => onZoom(walk.mapImage)}>
           <Image source={{ uri: walk.mapImage }} style={styles.thumbnailImage} resizeMode="cover" />
-        </View>
+        </TouchableOpacity>
       ) : (
         <View style={styles.journeyIconContainer}>
           <View style={styles.journeyIcon}>
@@ -73,18 +75,23 @@ const YourWalkCard = ({ walk, onShare }: YourWalkCardProps) => {
       <View style={styles.journeyInfo}>
         <View style={styles.journeyHeader}>
           <Text style={styles.journeyTitle} numberOfLines={1}>{walk.title}</Text>
-          {walk.isPublic ? (
-             <View style={{ backgroundColor: '#E3F2FD', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
-                <Text style={{ fontSize: 10, color: '#1976D2', fontWeight: '600' }}>SHARED</Text>
-             </View>
-          ) : (
-             <TouchableOpacity 
-                onPress={() => onShare(walk)}
-                style={{ backgroundColor: '#E45C12', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}
-             >
-                <Text style={{ fontSize: 10, color: '#fff', fontWeight: '600' }}>SHARE</Text>
-             </TouchableOpacity>
-          )}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {walk.isPublic ? (
+               <View style={{ backgroundColor: '#E3F2FD', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
+                  <Text style={{ fontSize: 10, color: '#1976D2', fontWeight: '600' }}>SHARED</Text>
+               </View>
+            ) : (
+               <TouchableOpacity 
+                  onPress={() => onShare(walk)}
+                  style={{ backgroundColor: '#E45C12', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}
+               >
+                  <Text style={{ fontSize: 10, color: '#fff', fontWeight: '600' }}>SHARE</Text>
+               </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={() => onAction(walk)} style={{ padding: 4 }}>
+                <Ionicons name="ellipsis-vertical" size={16} color="#666" />
+            </TouchableOpacity>
+          </View>
         </View>
         <View style={styles.journeyStats}>
           <View style={styles.statItem}>
@@ -113,11 +120,14 @@ interface CommunityWalkCardProps {
   currentUserId: string;
   onLike: (walkId: string) => void;
   onComment: (walk: Walking) => void;
+  onAction: (walk: Walking) => void;
+  onZoom: (imageUrl: string) => void;
 }
 
-const CommunityWalkCard = ({ walk, currentUserId, onLike, onComment }: CommunityWalkCardProps) => {
-  const user = typeof walk.userId === 'object' ? walk.userId : { name: 'User', avatar: '' };
+const CommunityWalkCard = ({ walk, currentUserId, onLike, onComment, onAction, onZoom }: CommunityWalkCardProps) => {
+  const user = typeof walk.userId === 'object' ? walk.userId : { _id: '', name: 'User', avatar: '' };
   const isLiked = walk.likes?.includes(currentUserId);
+  const isOwner = user._id === currentUserId;
 
   return (
     <View style={styles.communityCard}>
@@ -133,6 +143,11 @@ const CommunityWalkCard = ({ walk, currentUserId, onLike, onComment }: Community
           <Text style={styles.userName}>{user.name}</Text>
           <Text style={styles.journeyTime}>{timeAgo(walk.createdAt)}</Text>
         </View>
+        {isOwner && (
+            <TouchableOpacity onPress={() => onAction(walk)} style={{ padding: 8 }}>
+                <Ionicons name="ellipsis-horizontal" size={20} color="#666" />
+            </TouchableOpacity>
+        )}
       </View>
 
       <Text style={styles.communityTitle}>{walk.title}</Text>
@@ -158,7 +173,9 @@ const CommunityWalkCard = ({ walk, currentUserId, onLike, onComment }: Community
 
       {/* Map Image */}
       {walk.mapImage ? (
-        <Image source={{ uri: walk.mapImage }} style={styles.trackImage} resizeMode="cover" />
+        <TouchableOpacity onPress={() => onZoom(walk.mapImage)}>
+             <Image source={{ uri: walk.mapImage }} style={styles.trackImage} resizeMode="cover" />
+        </TouchableOpacity>
       ) : (
         <View style={styles.mapPlaceholder}>
           <Ionicons name="map" size={40} color="#ccc" />
@@ -195,6 +212,21 @@ export default function SocialScreen() {
   const [selectedWalk, setSelectedWalk] = useState<Walking | null>(null);
   const [comments, setComments] = useState<any[]>([]);
   const [newComment, setNewComment] = useState('');
+  
+  // Edit/Delete State
+  const [showActionModal, setShowActionModal] = useState(false);
+  const [actionWalk, setActionWalk] = useState<Walking | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Edit Specific State
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editCaption, setEditCaption] = useState('');
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  // Image Zoom State
+  const [showZoomModal, setShowZoomModal] = useState(false);
+  const [zoomImage, setZoomImage] = useState<string | null>(null);
 
   const fetchData = useCallback(async (showRefresh = false) => {
     try {
@@ -266,7 +298,80 @@ export default function SocialScreen() {
     }
   };
 
+  const handleOpenAction = (walk: Walking) => {
+    setActionWalk(walk);
+    setShowActionModal(true);
+  };
 
+  const handleDeleteWalk = async () => {
+    if (!user?._id || !actionWalk) return;
+    
+    Alert.alert(
+      "Delete Journey",
+      "Are you sure you want to delete this journey? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: async () => {
+            setIsDeleting(true);
+            try {
+              await api.deleteWalk(actionWalk._id, user._id);
+              // Update local state
+              setMyWalks(prev => prev.filter(w => w._id !== actionWalk._id));
+              setCommunityWalks(prev => prev.filter(w => w._id !== actionWalk._id));
+              setShowActionModal(false);
+              setActionWalk(null);
+              Alert.alert("Deleted", "Journey has been removed.");
+            } catch (error: any) {
+              Alert.alert("Error", error.message || "Failed to delete walk");
+            } finally {
+              setIsDeleting(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleOpenEdit = () => {
+    if (actionWalk) {
+        setEditTitle(actionWalk.title);
+        setEditCaption(actionWalk.caption || '');
+        setShowEditModal(true);
+        setShowActionModal(false);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!user?._id || !actionWalk) return;
+    setIsUpdating(true);
+    try {
+        await api.updateWalk(actionWalk._id, { title: editTitle, caption: editCaption });
+        
+        // Update local state
+        const updateWalkInList = (list: Walking[]) => list.map(w => 
+            w._id === actionWalk._id ? { ...w, title: editTitle, caption: editCaption } : w
+        );
+        
+        setMyWalks(prev => updateWalkInList(prev));
+        setCommunityWalks(prev => updateWalkInList(prev));
+        
+        setShowEditModal(false);
+        setActionWalk(null);
+        Alert.alert("Success", "Journey updated!");
+    } catch (error: any) {
+        Alert.alert("Error", error.message || "Failed to update walk");
+    } finally {
+        setIsUpdating(false);
+    }
+  };
+
+  const handleZoomImage = (imageUrl: string) => {
+    setZoomImage(imageUrl);
+    setShowZoomModal(true);
+  };
 
   const handleShareWalk = async (walk: Walking) => {
     Alert.alert(
@@ -314,15 +419,15 @@ export default function SocialScreen() {
           {/* Your Walks */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Your Walks</Text>
-            <Text style={styles.sectionSubtitle}>Walks you have recorded</Text>
+            <Text style={styles.sectionSubtitle}>Your saved journeys</Text>
 
             {isLoading ? (
               <ActivityIndicator size="small" color="#E45C12" style={{ marginVertical: 20 }} />
             ) : myWalks.length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="map-outline" size={48} color="#ccc" />
-                <Text style={styles.emptyText}>No walks recorded yet</Text>
-                <Text style={styles.emptySubtext}>Go to Explore and record your first walk!</Text>
+                <Text style={styles.emptyText}>No journeys saved yet</Text>
+                <Text style={styles.emptySubtext}>Start a navigation in Explore to save your first journey!</Text>
                 <TouchableOpacity 
                     style={styles.goRecordButton}
                     onPress={() => {
@@ -334,7 +439,13 @@ export default function SocialScreen() {
               </View>
             ) : (
               myWalks.map((walk) => (
-                <YourWalkCard key={walk._id} walk={walk} onShare={handleShareWalk} />
+                <YourWalkCard 
+                  key={walk._id} 
+                  walk={walk} 
+                  onShare={handleShareWalk} 
+                  onAction={handleOpenAction}
+                  onZoom={handleZoomImage}
+                />
               ))
             )}
           </View>
@@ -364,6 +475,8 @@ export default function SocialScreen() {
                   currentUserId={user?._id || ''}
                   onLike={handleLike}
                   onComment={handleOpenComments}
+                  onAction={handleOpenAction}
+                  onZoom={handleZoomImage}
                 />
               ))
             )}
@@ -424,6 +537,100 @@ export default function SocialScreen() {
               </View>
             </View>
           </View>
+        </Modal>
+
+        {/* Action Modal */}
+        <Modal
+          visible={showActionModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowActionModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.actionSheet}>
+                <Text style={styles.actionSheetTitle}>Journey Options</Text>
+                <TouchableOpacity style={styles.actionButton} onPress={handleOpenEdit}>
+                    <Ionicons name="create-outline" size={20} color="#333" style={{ marginRight: 12 }} />
+                    <Text style={styles.actionButtonText}>Edit Details</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionButton} onPress={handleDeleteWalk}>
+                    <Ionicons name="trash-outline" size={20} color="#ff3b30" style={{ marginRight: 12 }} />
+                    <Text style={[styles.actionButtonText, { color: '#ff3b30' }]}>Delete Journey</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.cancelButton} onPress={() => setShowActionModal(false)}>
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Edit Modal */}
+        <Modal
+          visible={showEditModal}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowEditModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Edit Journey</Text>
+                <TouchableOpacity onPress={() => setShowEditModal(false)}>
+                  <Ionicons name="close" size={24} color="#333" />
+                </TouchableOpacity>
+              </View>
+              <View style={{ padding: 20 }}>
+                 <Text style={styles.inputLabel}>Title</Text>
+                 <TextInput
+                    style={styles.editInput}
+                    value={editTitle}
+                    onChangeText={setEditTitle}
+                    placeholder="Journey Title"
+                 />
+                 <Text style={styles.inputLabel}>Caption</Text>
+                 <TextInput
+                    style={[styles.editInput, { height: 80, textAlignVertical: 'top' }]}
+                    value={editCaption}
+                    onChangeText={setEditCaption}
+                    placeholder="Add a caption..."
+                    multiline
+                 />
+                 <TouchableOpacity 
+                    style={[styles.saveButton, isUpdating && { opacity: 0.7 }]}
+                    onPress={handleSaveEdit}
+                    disabled={isUpdating}
+                 >
+                    {isUpdating ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveButtonText}>Save Changes</Text>}
+                 </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Image Zoom Modal */}
+        <Modal
+          visible={showZoomModal}
+          transparent={false}
+          animationType="fade"
+          onRequestClose={() => setShowZoomModal(false)}
+        >
+            <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+                <TouchableOpacity 
+                    style={{ position: 'absolute', top: 40, right: 20, zIndex: 10, padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 }}
+                    onPress={() => setShowZoomModal(false)}
+                >
+                    <Ionicons name="close" size={28} color="#fff" />
+                </TouchableOpacity>
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                    {zoomImage && (
+                        <Image 
+                            source={{ uri: zoomImage }} 
+                            style={{ width: '100%', height: '100%' }} 
+                            resizeMode="contain" 
+                        />
+                    )}
+                </View>
+            </SafeAreaView>
         </Modal>
       </SafeAreaView>
     </Background>
@@ -495,6 +702,81 @@ const styles = StyleSheet.create({
   inputGroup: {
     marginBottom: 20,
   },
+  actionSheet: {
+    backgroundColor: '#fff',
+    width: '90%',
+    borderRadius: 20,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  actionSheetTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#333',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  actionButtonText: {
+    fontSize: 16,
+    color: '#333',
+    fontWeight: '500',
+  },
+  cancelButton: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '600',
+  },
+  inputLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+    fontWeight: '500', 
+  },
+  editInput: {
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  saveButton: {
+    backgroundColor: '#E45C12',
+    height: 50,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    shadowColor: '#E45C12',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+
   rowInputs: {
     flexDirection: 'row',
     marginBottom: 0,

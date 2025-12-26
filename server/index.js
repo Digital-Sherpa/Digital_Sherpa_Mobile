@@ -43,7 +43,8 @@ import {
   likeWalk,
   commentWalk,
   getWalkComments,
-  updateWalk
+  updateWalk,
+  deleteWalk
 } from "./controllers/walking.controller.js";
 
 
@@ -95,6 +96,7 @@ app.put("/walking/:id", updateWalk);
 app.post("/walking/:id/like", likeWalk);
 app.post("/walking/:id/comment", commentWalk);
 app.get("/walking/:id/comments", getWalkComments);
+app.delete("/walking/:id", deleteWalk);
 
 
 app.get("/seed-all", async (req, res) => {

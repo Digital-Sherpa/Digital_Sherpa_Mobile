@@ -452,6 +452,21 @@ export const api = {
     }
   },
 
+  deleteWalk: async (id: string, userId: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/walking/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message);
+      return result;
+    } catch (error) {
+      throw error;
+    }
+  },
+
     // Social interactions
     likeJourney: async (journeyId: string, userId: string) => {
       try {

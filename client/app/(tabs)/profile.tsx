@@ -1,7 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { View, Text, Image, StyleSheet, Dimensions, TouchableOpacity, ScrollView, Modal, TextInput, Alert, Pressable } from 'react-native';
-import { useRouter } from 'expo-router';
 import { api } from '../../services/api';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,8 +10,7 @@ const { width } = Dimensions.get('window');
 
 
 const ProfileScreen = () => {
-  const { user, logout } = useAuth();
-  const router = useRouter();
+  const { user } = useAuth();
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [form, setForm] = useState({
     name: user?.name || '',
@@ -77,24 +75,6 @@ const ProfileScreen = () => {
     } finally {
       setIsSaving(false);
     }
-  };
-
-  const handleLogout = async () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel', style: 'cancel' },
-      { 
-        text: 'Logout', 
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await logout();
-            router.replace('/login');
-          } catch (error) {
-            console.error(error);
-          }
-        }
-      }
-    ]);
   };
 
   return (
@@ -272,13 +252,6 @@ const ProfileScreen = () => {
                 <Text style={{ color: '#fff', fontWeight: 'bold' }}>{isSaving ? 'Saving...' : 'Save'}</Text>
               </Pressable>
             </View>
-            
-            <TouchableOpacity 
-                style={[modalStyles.cancelBtn, { marginTop: 20, backgroundColor: '#FFEBEE', alignSelf: 'center', width: '100%', alignItems: 'center' }]}
-                onPress={handleLogout}
-            >
-                <Text style={{ color: '#D32F2F', fontWeight: 'bold' }}>Log Out</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>

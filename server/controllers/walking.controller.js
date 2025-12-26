@@ -219,3 +219,34 @@ export const updateWalk = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+/**
+ * Delete a walk
+ */
+export const deleteWalk = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body; 
+    
+    // Support query param for userId as fallback for DELETE requests
+    const uid = userId || req.query.userId;
+    
+    if (!uid) return res.status(400).json({ success: false, message: "User ID required" });
+
+    const walk = await Walking.findById(id);
+    if (!walk) return res.status(404).json({ success: false, message: "Walk not found" });
+
+    // Check ownership
+    const ownerId = typeof walk.userId === 'object' ? walk.userId._id.toString() : walk.userId.toString();
+    
+    if (ownerId !== uid) {
+        return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    await Walking.findByIdAndDelete(id);
+
+    res.json({ success: true, message: "Walk deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

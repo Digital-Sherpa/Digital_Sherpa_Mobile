@@ -58,6 +58,17 @@ export default function TabLayout() {
             </View>
           ),
         }}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            e.preventDefault();
+            // Pass a unique timestamp to force a fresh update in explore.tsx
+            navigation.navigate('explore', { 
+              refreshId: Date.now().toString(),
+              // Clear other params explicitly just in case
+              type: null, id: null, slug: null, eventLat: null, eventLng: null, eventName: null 
+            });
+          },
+        })}
       />
       <Tabs.Screen
         name="record"
@@ -68,6 +79,19 @@ export default function TabLayout() {
             </View>
           ),
         }}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            // Prevent navigation to the empty record screen
+            e.preventDefault();
+            // Redirect to Explore tab and trigger recording mode
+            navigation.navigate('explore', { 
+              refreshId: Date.now().toString(),
+              startRecording: 'true',
+              // Clear other context
+              type: null, id: null, slug: null, eventLat: null, eventLng: null, eventName: null 
+            });
+          },
+        })}
       />
       <Tabs.Screen
         name="social"
